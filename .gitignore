@@ -1,0 +1,35 @@
+# Node
+node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/.turbo/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+backend/**/__pycache__/
+.pytest_cache/
+
+# Env
+.env
+.env.local
+*.env
+
+# Data cache (keep the folder, ignore contents)
+data/cache/*
+!data/cache/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

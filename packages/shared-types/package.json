@@ -1,0 +1,8 @@
+{
+  "name": "@sotp-intelligence/shared-types",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript types shared across the SOTP Intelligence frontend (and future services).",
+  "main": "index.ts",
+  "types": "index.ts"
+}
