@@ -19,7 +19,7 @@ export default function Home() {
   function handleAnalyze() {
     const value = ticker.trim().toUpperCase();
     if (!value) return;
-    router.push(`/dashboard/${encodeURIComponent(value)}`);
+    router.push(`/${encodeURIComponent(value)}`);
   }
 
   return (

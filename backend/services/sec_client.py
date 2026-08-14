@@ -22,6 +22,12 @@ from backend.services.cache import FileCache
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL_TMPL = "https://data.sec.gov/submissions/CIK{cik10}.json"
 COMPANY_FACTS_URL_TMPL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik10}.json"
+FRAMES_URL_TMPL = "https://data.sec.gov/api/xbrl/frames/{taxonomy}/{tag}/{unit}/{period}.json"
+
+# Frames responses are large, cover a whole historical quarter/year of
+# already-filed data, and never change once published -- cache them much
+# longer than the 24h default used for per-company lookups.
+FRAMES_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
@@ -170,6 +176,56 @@ class SECClient:
         """Fetch XBRL company facts (all reported concepts, all periods) for a zero-padded CIK."""
         url = COMPANY_FACTS_URL_TMPL.format(cik10=cik10)
         return self._fetch_json(url, cache_ttl_seconds=24 * 60 * 60)
+
+    @staticmethod
+    def frame_period(fiscal_year: int, quarter: Optional[int], instant: bool) -> str:
+        """Build the SEC frames period token, e.g. 'CY2023Q4I', 'CY2023Q4', 'CY2023'.
+
+        Instant concepts (balance-sheet items like Assets, CashAndCashEquivalents)
+        are point-in-time as of a quarter-end date and require the 'I' suffix.
+        Duration concepts (income-statement/cash-flow items like Revenues) cover a
+        period: a specific quarter (no suffix) or, if ``quarter`` is None, the full
+        fiscal year.
+        """
+        if quarter is None:
+            if instant:
+                raise ValueError("Full-year instant frames aren't a thing -- pass a quarter for instant concepts")
+            return f"CY{fiscal_year}"
+        if quarter not in (1, 2, 3, 4):
+            raise ValueError(f"quarter must be 1-4 or None, got {quarter}")
+        suffix = "I" if instant else ""
+        return f"CY{fiscal_year}Q{quarter}{suffix}"
+
+    def get_frame(
+        self,
+        tag: str,
+        fiscal_year: int,
+        quarter: Optional[int] = None,
+        *,
+        instant: bool = False,
+        unit: str = "USD",
+        taxonomy: str = "us-gaap",
+    ) -> dict[str, Any]:
+        """Fetch an XBRL "frame": one concept's reported value across ALL filers
+        for a given period.
+
+        https://data.sec.gov/api/xbrl/frames/{taxonomy}/{tag}/{unit}/{period}.json
+
+        ``instant=True`` selects a point-in-time period (period gets an 'I'
+        suffix, e.g. CY2023Q4I) for balance-sheet-style concepts (Assets, Cash,
+        ...). ``instant=False`` (default) selects a duration period: a single
+        quarter (CY2023Q4) if ``quarter`` is given, or the full fiscal year
+        (CY2023) if ``quarter`` is None -- appropriate for income-statement /
+        cash-flow concepts (Revenues, NetIncomeLoss, ...).
+
+        Returns the raw JSON payload: {"data": [{"cik": ..., "entityName": ...,
+        "val": ..., ...}, ...], plus metadata fields}. Same caching, rate
+        limiting, and typed-error handling (SECNotFoundError/SECRateLimitError/
+        SECUnavailableError) as every other SEC client method.
+        """
+        period = self.frame_period(fiscal_year, quarter, instant)
+        url = FRAMES_URL_TMPL.format(taxonomy=taxonomy, tag=tag, unit=unit, period=period)
+        return self._fetch_json(url, cache_ttl_seconds=FRAMES_CACHE_TTL_SECONDS)
 
     # ------------------------------------------------------------ Helpers
 

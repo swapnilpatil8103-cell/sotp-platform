@@ -140,6 +140,27 @@ implied_equity = target_metric * chosen_multiple       (equity-based multiples: 
 implied_price  = implied_equity / target_diluted_shares_outstanding
 ```
 
+**Peer sourcing.** Peer selection always happens upstream of `run_comps` and
+is always human-confirmed before use, but the *candidates* offered to a human
+can now come from three sources:
+1. Manually specified — a human types in peer tickers/financials directly.
+2. AI-recommended (Phase 6, `backend/ai/tasks/peer_recommendation.py`) — an
+   AI task proposes candidate tickers with a rationale; never auto-applied.
+3. SEC frames-discovered (Phase 10,
+   `backend/data/peer_discovery.py::discover_peer_candidates`, exposed via
+   `GET /companies/{ticker}/peer-candidates`) — real candidate peers sourced
+   from the SEC XBRL `frames` API (every filer that reported a given concept
+   for a period), filtered to the target's own SIC-code business
+   classification, with real financial facts and honest REPORTED/MISSING
+   provenance per concept.
+
+All three are proposal-only: none of them write an `AssumptionDecision`,
+`ValuationRun`, or otherwise auto-populate a `CompsInput.peers` list. A human
+(or an explicit caller choice) still selects and confirms which candidates
+actually become `CompPeer` entries before a comps run uses them — the
+project's governance model treats peer sourcing exactly like every other
+assumption: AI/automation proposes, a human approves.
+
 ### 4. Sum-of-the-Parts (SOTP) (`backend/valuation/sotp.py`)
 
 Each segment's enterprise value is computed upstream (via DCF and/or comps

@@ -86,6 +86,35 @@ is served from the DB without re-hitting SEC EDGAR.
 - Errors: `404` unknown ticker / no facts for that period; `503` SEC
   rate-limited or unavailable.
 
+### `GET /companies/{ticker}/peer-candidates`
+Phase 10 addition. Query params: `fiscal_year` (required int), `quarter`
+(optional int 1-4; omitted = full fiscal year), `frame_concept` (default
+`"Revenues"`, a US-GAAP duration tag), `max_shortlist` (default 15).
+
+Discovers candidate comps peers via the real SEC XBRL **frames** API
+(`backend/services/sec_client.py::SECClient.get_frame`,
+`backend/data/peer_discovery.py::discover_peer_candidates`): pulls every
+filer that reported `frame_concept` for the period, ranks by proximity to
+the target's own reported value, takes a bounded shortlist, cross-references
+each candidate's SIC code (via cached `submissions`) against the target's own
+`backend.data.business_classifier` category, and for survivors pulls real
+financial facts (revenue, operating income, D&A, net income, debt, cash)
+with honest `REPORTED`/`MISSING` status per concept (never fabricated).
+
+**Read-only research/discovery endpoint** — it does not create or mutate any
+`AssumptionDecision`, `ValuationRun`, or other governance-tracked state, and
+it never calls `backend.valuation.comps.run_comps` itself. Exactly like AI
+peer recommendation (Phase 6) and manual peer entry, a discovered candidate
+still requires explicit human/caller review and confirmation before it's used
+in an actual comps run — see `docs/valuation-methodology.md`.
+
+- Response: `{ticker, cik, target_classification: {category, sic_code,
+  rationale}, frame_concept, fiscal_year, quarter, frame_company_count, note,
+  candidates: [{cik, ticker, entity_name, sic, sic_description,
+  classification_category, frame_concept, frame_value, financials: [{concept,
+  value, unit, xbrl_tag, data_status}...]}...], governance_note}`.
+- Errors: `404` unknown ticker; `503` SEC rate-limited or unavailable.
+
 ---
 
 ## Market data — `backend/api/routers/market_data.py` (prefix `/companies`)

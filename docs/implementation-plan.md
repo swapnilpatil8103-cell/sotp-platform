@@ -531,6 +531,46 @@ CI, deployment configs (Vercel for web, containerized FastAPI + Supabase for
 backend), end-to-end test suite in top-level `tests/`. Depends on: all prior
 phases.
 
+#### Phase 10 addition — SEC XBRL `frames` peer discovery (DONE)
+Automatic peer-data sourcing for comps, built on top of the real SEC XBRL
+"frames" API rather than requiring a human to hand-supply peer financials for
+every comps run.
+
+- `backend/services/sec_client.py::SECClient.get_frame` — fetches
+  `https://data.sec.gov/api/xbrl/frames/{taxonomy}/{tag}/{unit}/{period}.json`,
+  i.e. one XBRL concept's reported value across every filer for a period.
+  `SECClient.frame_period(fiscal_year, quarter, instant)` builds the period
+  token: instant/point-in-time concepts (balance-sheet items) get a quarter +
+  `I` suffix (`CY2023Q4I`); duration concepts (income-statement/cash-flow
+  items) take a single quarter (`CY2023Q4`) or, with `quarter=None`, the full
+  fiscal year (`CY2023`). Same caching (`FileCache`, 24h TTL — frame data for
+  an already-filed historical period never changes), rate limiting, and typed
+  error handling (`SECNotFoundError`/`SECRateLimitError`/`SECUnavailableError`)
+  as every other SEC client method.
+- `backend/data/peer_discovery.py::discover_peer_candidates` — given a target
+  CIK and a period, pulls the frame for a defining concept (default
+  `Revenues`), ranks the frame by proximity to the target's own reported
+  value for that concept, takes a bounded shortlist (default top 15) *before*
+  fetching any per-candidate data (keeps SEC traffic bounded and cached),
+  cross-references each shortlisted CIK's cached `submissions` SIC code via
+  `backend.data.business_classifier.classify_business`, filters to the
+  target's own classification category, and for survivors pulls real
+  financial facts (revenue, operating income, D&A, net income, debt, cash)
+  via the existing `concept_mapping`/`normalizer` machinery — honestly
+  flagging any missing concept as MISSING rather than estimating it. This is
+  a discovery/shortlist function only: it never calls
+  `backend.valuation.comps.run_comps` and never auto-selects peers.
+- `GET /companies/{ticker}/peer-candidates` (`backend/api/routers/companies.py`)
+  — read-only research endpoint wrapping the above. Does not create or
+  mutate any `AssumptionDecision`, `ValuationRun`, or other governance state
+  — exactly like AI peer recommendation (Phase 6) and manual peer entry, a
+  discovered candidate still needs explicit human/caller confirmation before
+  it's used in an actual comps run. See `docs/valuation-methodology.md`.
+- Tests: `backend/tests/test_sec_frames.py` (mocked unit tests + one
+  `@pytest.mark.integration` test against the real frames API),
+  `backend/tests/test_peer_discovery.py` (fixture-based filtering/provenance
+  tests).
+
 ## AI governance rules (summary)
 
 See `docs/ai-governance.md` for the full contract. Summary: AI only

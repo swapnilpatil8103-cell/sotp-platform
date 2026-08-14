@@ -25,7 +25,7 @@ export default function TickerLayout({
   params: { ticker: string };
 }) {
   const ticker = params.ticker?.toUpperCase() ?? "";
-  const base = `/dashboard/${ticker}`;
+  const base = `/${ticker}`;
 
   return (
     <div className="min-h-screen bg-white">
