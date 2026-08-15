@@ -6,10 +6,8 @@ it never crashes the caller and never returns fabricated content. Callers
 (backend/ai/tasks/*) are responsible for turning an AIUnavailableError into
 an explicit ABSTAIN result.
 
-No real network call has been exercised against this adapter in this
-environment (no GEMINI_API_KEY configured) -- it is wired against the real
-google-generativeai SDK and exercised in tests via backend/ai/testing.py's
-FakeAIAdapter, which implements the same interface.
+Wired against the real google-generativeai SDK; exercised in tests via
+backend/ai/testing.py's FakeAIAdapter, which implements the same interface.
 """
 
 from __future__ import annotations
@@ -20,7 +18,7 @@ from typing import Any, Optional
 from backend.ai.adapter import AIAdapter, AIRecommendation
 from backend.ai.errors import AIRateLimitError, AIResponseParseError, AIUnavailableError
 
-DEFAULT_MODEL = "gemini-1.5-pro"
+DEFAULT_MODEL = "gemini-3-flash-preview"
 
 
 class GeminiAdapter(AIAdapter):
