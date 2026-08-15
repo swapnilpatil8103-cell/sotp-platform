@@ -73,10 +73,14 @@ revenue by business segment) are tagged with an XBRL dimension, almost always
 the filing's actual XBRL instance document. Since ~2019 filers embed that
 instance as **inline XBRL** directly inside the primary 10-K HTML document.
 
-`backend/data/xbrl_instance.py` fetches and parses that document (via `lxml`):
-`xbrli:context` elements (with `xbrldi:explicitMember` dimensional
+`backend/data/xbrl_instance.py` owns the parsing of that document (via
+`lxml`): `xbrli:context` elements (with `xbrldi:explicitMember` dimensional
 qualifiers) and `ix:nonFraction` facts (handling `scale`, `sign`, and
-parenthesized-negative number formatting).
+parenthesized-negative number formatting). The fetch side goes through
+`SECConnector.get_filing_xbrl` (`backend/services/sec_client.py`), which
+wraps that parsing with the connector's shared disk caching, rate limiting,
+and typed-error handling — see `docs/architecture.md` for the full
+`SECConnector` method list.
 
 `backend/data/segment_extractor.py` then:
 1. Finds every context dimensionally qualified on a business-segment axis and

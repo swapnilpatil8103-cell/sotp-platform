@@ -9,9 +9,18 @@ actual XBRL instance document -- which, since ~2019, SEC filers embed as
 tags wrapping ``xbrli:context`` / ``xbrldi:explicitMember`` dimensional
 qualifiers).
 
-This module fetches and parses that inline-XBRL document to recover
-dimensionally-qualified facts, so ``segment_extractor.py`` can build real
-segment breakdowns instead of guessing.
+This module owns the pure parsing logic for that inline-XBRL document
+(contexts, dimensions, ``ix:nonFraction`` facts) so ``segment_extractor.py``
+can build real segment breakdowns instead of guessing.
+
+The fetch side (``fetch_inline_xbrl_document`` below) is kept here as a
+standalone, dependency-light utility, but the connector's
+``SECConnector.get_filing_xbrl`` (``backend/services/sec_client.py``) is now
+the authoritative way production code fetches + parses a filing's inline-XBRL
+document: it wraps this module's ``parse_inline_xbrl`` with the connector's
+shared caching/rate-limiting/typed-error handling instead of a bare
+``httpx.get``. ``segment_extractor.py`` goes through the connector rather
+than calling ``fetch_inline_xbrl_document`` directly.
 """
 
 from __future__ import annotations

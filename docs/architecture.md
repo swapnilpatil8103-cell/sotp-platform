@@ -22,10 +22,15 @@ out explicitly below rather than glossed over.
   Contains no business logic itself; delegates to `services`/`data`/
   `valuation`/`governance`. No auth layer exists (never in scope for
   Phases 1–9 — see the Definition-of-Done audit).
-- **`services/`** — external integration clients: `sec_client.py` (SEC
-  EDGAR, with disk caching via `FileCache`, an internal rate limiter capped
-  at ~8 req/s, and typed retry/backoff on 429/5xx), `market_data_client.py`
-  (yfinance-backed, explicitly framed as "latest available, not real-time").
+- **`services/`** — external integration clients: `sec_client.py` (defines
+  `SECConnector`, the single access point for every SEC EDGAR surface this
+  project uses — ticker/CIK resolution, submissions, XBRL company facts,
+  company-concept history, cross-filer frames, per-filing metadata, raw
+  filing documents, and a filing's inline-XBRL data — with disk caching via
+  `FileCache`, an internal rate limiter capped at ~8 req/s, and typed
+  retry/backoff on 429/5xx), `market_data_client.py` (yfinance-backed,
+  explicitly framed as "latest available, not real-time"). See "SEC access
+  layer: SECConnector" below for the full method list.
 - **`data/`** — normalization layer: `concept_mapping.py` (canonical
   financial concepts → XBRL US-GAAP tag candidates), `normalizer.py`
   (raw SEC companyfacts JSON → typed `FinancialFact` rows, one per
@@ -67,6 +72,50 @@ out explicitly below rather than glossed over.
   governance decision and valuation run, queryable per-company or per-run
   via `/valuation/*/audit-trail`.
 
+## SEC access layer: `SECConnector`
+
+`backend/services/sec_client.py` defines `SECConnector`, the single class
+every SEC-EDGAR-touching call site in the codebase goes through (companies/
+segments/filings/market-data routers, `peer_discovery.py`,
+`segment_extractor.py`). It consolidates what used to be split between this
+module and a separate inline-XBRL fetch helper (`backend/data/xbrl_instance.py`)
+into one consistent surface, all sharing the same `FileCache`-backed caching,
+~8 req/s rate limiting, retry/backoff on 429/5xx, and typed error hierarchy
+(`SECNotFoundError` / `SECRateLimitError` / `SECUnavailableError`):
+
+- `resolve_ticker(ticker)` — ticker → raw CIK exactly as it appears in SEC's
+  ticker map (not zero-padded).
+- `get_company_cik(ticker)` — ticker → zero-padded 10-digit CIK; the
+  normalized form every other method expects. Built on `resolve_ticker`
+  rather than duplicating the lookup, so the "raw" and "normalized" forms
+  stay independently testable (see the module docstring for the full
+  rationale).
+- `get_submissions(cik10)` — company info + filing history.
+- `get_company_facts(cik10)` — XBRL company facts (every concept, every
+  period) for a company.
+- `get_company_concept(cik10, tag, taxonomy)` — one XBRL concept's full
+  reported history for a single company (narrower than `get_company_facts`
+  when only one tag's time series is needed).
+- `get_frame(tag, fiscal_year, quarter, instant, unit, taxonomy)` — one
+  concept's reported value across every filer for a period (drives peer
+  discovery).
+- `get_filing_metadata(cik10, accession_number)` — a single filing's
+  metadata (form, filing date, accession, primary document, source URL) by
+  accession number, independent of "latest N filings".
+- `get_latest_filings(cik10, form_types)` — the most recent filing per
+  requested form type; built on the same metadata-assembly helper as
+  `get_filing_metadata` so both stay consistent.
+- `get_filing_document(cik10, accession_number, filename)` — fetch a raw
+  filing document (e.g. the primary 10-K/10-Q htm) from EDGAR Archives.
+- `get_filing_xbrl(source_url)` — fetch + parse a filing's inline-XBRL
+  primary document into contexts (with dimensional qualifiers) and numeric
+  facts. This absorbs what used to be a standalone, uncached
+  `fetch_inline_xbrl_document` + `parse_inline_xbrl` call pair in
+  `backend/data/xbrl_instance.py`; the parsing logic still lives in that
+  module (it's pure and dependency-light), but the fetch now goes through
+  this connector's shared caching/rate-limiting/typed-error handling instead
+  of a bare `httpx.get`. `segment_extractor.py` is the primary consumer.
+
 ## Deviations from the original master spec
 
 - **Segment data required parsing inline-XBRL documents, not the
@@ -77,13 +126,13 @@ out explicitly below rather than glossed over.
   filing's own inline-XBRL instance document (the `R*.htm`/`.xml` viewer
   data attached to the actual 10-K accession), not in the flattened
   companyfacts JSON, which only exposes top-level (non-dimensional)
-  concepts. `backend/data/segment_extractor.py` fetches and parses that
-  instance document directly (contexts, dimensions, segment members) rather
-  than querying companyfacts a second time. This is slower and more
-  fragile (single-segment filers, non-standard tagging, and axis-naming
-  variance all show up as a `note` on the result rather than a hard
-  failure) but is the only approach that actually returns real per-segment
-  numbers.
+  concepts. `backend/data/segment_extractor.py` calls
+  `SECConnector.get_filing_xbrl` to fetch and parse that instance document
+  directly (contexts, dimensions, segment members) rather than querying
+  companyfacts a second time. This is slower and more fragile
+  (single-segment filers, non-standard tagging, and axis-naming variance all
+  show up as a `note` on the result rather than a hard failure) but is the
+  only approach that actually returns real per-segment numbers.
 - **No ticker → company_id resolution endpoint.** `POST
   /valuation/{ticker}/run` and `GET /valuation/{ticker}/runs` are `501`
   stubs; the governed valuation-run flow (`POST /valuation/run` etc.) is

@@ -50,7 +50,7 @@ def get_company_segments(
 ) -> CompanySegmentsRead:
     client = get_sec_client()
     try:
-        cik10 = client.get_cik(ticker)
+        cik10 = client.get_company_cik(ticker)
         filings = client.get_latest_filings(cik10, form_types=("10-K",))
     except SECNotFoundError:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -80,7 +80,7 @@ def get_company_segments(
 
     try:
         result = extract_segments_for_filing(
-            user_agent=client.user_agent,
+            connector=client,
             cik10=cik10,
             fiscal_year=target_year,
             fiscal_period="FY",

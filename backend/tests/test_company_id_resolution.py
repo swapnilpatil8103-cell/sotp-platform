@@ -15,8 +15,8 @@ from backend.api.main import app
 client = TestClient(app)
 
 
-class _FakeSECClient:
-    def get_cik(self, ticker):
+class _FakeSECConnector:
+    def get_company_cik(self, ticker):
         return "0000320193"
 
     def get_submissions(self, cik10):
@@ -30,7 +30,7 @@ class _FakeSECClient:
 
 
 def test_get_company_returns_company_id():
-    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECClient()
+    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECConnector()
     try:
         resp = client.get("/companies/AAPL")
     finally:
@@ -43,7 +43,7 @@ def test_get_company_returns_company_id():
 
 
 def test_get_company_id_endpoint_resolves_and_persists():
-    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECClient()
+    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECConnector()
     try:
         resp1 = client.get("/companies/AAPL/id")
         resp2 = client.get("/companies/AAPL/id")

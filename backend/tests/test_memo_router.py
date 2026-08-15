@@ -17,8 +17,8 @@ from sqlmodel import Session
 client = TestClient(app)
 
 
-class _FakeSECClient:
-    def get_cik(self, ticker):
+class _FakeSECConnector:
+    def get_company_cik(self, ticker):
         return "0000320193"
 
 
@@ -45,7 +45,7 @@ def _seed_company_with_run(ticker="AAPL", cik="0000320193"):
 def test_memo_endpoint_generates_sections_from_real_data():
     company_id = _seed_company_with_run()
 
-    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECClient()
+    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECConnector()
     app.dependency_overrides[memo_router._get_adapter] = lambda: FakeAIAdapter(
         fixed_text="Equity value stands at 3000000.0, or 150.0 per share."
     )
@@ -66,7 +66,7 @@ def test_memo_endpoint_generates_sections_from_real_data():
 
 
 def test_memo_endpoint_404_when_no_valuation_run_exists():
-    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECClient()
+    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECConnector()
     app.dependency_overrides[memo_router._get_adapter] = lambda: FakeAIAdapter(fixed_text="whatever")
     try:
         resp = client.get("/memo/AAPL")

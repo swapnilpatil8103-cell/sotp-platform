@@ -2,7 +2,7 @@
 
 Kept as a top-level `/filings` collection per the original API shape; the
 actual SEC lookup logic lives in `backend.api.routers.companies.get_company_filings`
-to avoid duplicating SECClient error handling.
+to avoid duplicating SECConnector error handling.
 """
 
 from __future__ import annotations

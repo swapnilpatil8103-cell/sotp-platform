@@ -11,15 +11,15 @@ import pytest
 from backend.data.segment_extractor import extract_segments_for_filing
 from backend.data.normalizer import latest_available_fiscal_year
 from backend.services.cache import FileCache
-from backend.services.sec_client import SECClient
+from backend.services.sec_client import SECConnector
 
 
 @pytest.mark.integration
 def test_real_googl_segment_extraction(tmp_path):
     os.environ.setdefault("SEC_USER_AGENT", "SOTP Intelligence Test Suite test@example.com")
-    client = SECClient(cache=FileCache(cache_dir=tmp_path))
+    client = SECConnector(cache=FileCache(cache_dir=tmp_path))
 
-    cik10 = client.get_cik("GOOGL")
+    cik10 = client.get_company_cik("GOOGL")
     filings = client.get_latest_filings(cik10, form_types=("10-K",))
     assert filings, "expected at least one 10-K for GOOGL"
     filing = filings[0]
@@ -29,7 +29,7 @@ def test_real_googl_segment_extraction(tmp_path):
     assert fiscal_year is not None
 
     result = extract_segments_for_filing(
-        user_agent=client.user_agent,
+        connector=client,
         cik10=cik10,
         fiscal_year=fiscal_year,
         fiscal_period="FY",

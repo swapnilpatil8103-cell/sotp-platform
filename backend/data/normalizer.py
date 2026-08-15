@@ -68,7 +68,7 @@ def normalize_company_facts(
     Parameters
     ----------
     company_id: FK to the Company row these facts belong to.
-    company_facts: raw XBRL companyfacts JSON from SECClient.get_company_facts().
+    company_facts: raw XBRL companyfacts JSON from SECConnector.get_company_facts().
     fiscal_year: target fiscal year (e.g. 2023).
     fiscal_period: target fiscal period code as used by SEC XBRL ("FY", "Q1".."Q4").
     filing_id: optional FK to the specific Filing row, if known.

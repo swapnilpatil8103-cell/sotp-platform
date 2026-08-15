@@ -38,7 +38,7 @@ from backend.data.segment_extractor import extract_segments_for_filing
 from backend.models.enums import DataStatus
 from backend.schemas.valuation import DcfInput, SotpInput, SotpSegmentInput
 from backend.services.cache import FileCache
-from backend.services.sec_client import SECClient
+from backend.services.sec_client import SECConnector
 from backend.valuation.dcf import run_dcf
 from backend.valuation.sotp import run_sotp
 
@@ -55,10 +55,10 @@ def test_full_pipeline_aapl_dcf_and_sotp(tmp_path):
     """AAPL: ticker -> CIK -> SEC facts -> normalization -> DCF -> SOTP,
     asserting internal consistency of the resulting numbers."""
     os.environ.setdefault("SEC_USER_AGENT", "SOTP Intelligence Test Suite test@example.com")
-    client = SECClient(cache=FileCache(cache_dir=tmp_path))
+    client = SECConnector(cache=FileCache(cache_dir=tmp_path))
 
     # 1. Ticker -> CIK resolution.
-    cik10 = client.get_cik("AAPL")
+    cik10 = client.get_company_cik("AAPL")
     assert cik10 and len(cik10) == 10
 
     # 2. Business classification (drives eligible methodologies downstream).
@@ -91,7 +91,7 @@ def test_full_pipeline_aapl_dcf_and_sotp(tmp_path):
     filings = client.get_latest_filings(cik10, form_types=("10-K",))
     assert filings
     segment_result = extract_segments_for_filing(
-        user_agent=client.user_agent,
+        connector=client,
         cik10=cik10,
         fiscal_year=fiscal_year,
         fiscal_period="FY",
@@ -173,9 +173,9 @@ def test_full_pipeline_jpm_financial_institution_classification(tmp_path):
     those concepts in a meaningful sense.
     """
     os.environ.setdefault("SEC_USER_AGENT", "SOTP Intelligence Test Suite test@example.com")
-    client = SECClient(cache=FileCache(cache_dir=tmp_path))
+    client = SECConnector(cache=FileCache(cache_dir=tmp_path))
 
-    cik10 = client.get_cik("JPM")
+    cik10 = client.get_company_cik("JPM")
     assert cik10 and len(cik10) == 10
 
     submissions = client.get_submissions(cik10)

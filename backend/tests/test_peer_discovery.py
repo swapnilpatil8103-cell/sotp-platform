@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from backend.data.peer_discovery import discover_peer_candidates
 from backend.services.cache import FileCache
-from backend.services.sec_client import SECClient
+from backend.services.sec_client import SECConnector
 
 TARGET_CIK = "0000000001"  # SIC 7372 (software)
 SOFTWARE_PEER_CIK = "0000000002"  # SIC 7372 (software) -- should match
@@ -56,7 +56,7 @@ COMPANY_FACTS_BY_CIK = {
 
 def _client(tmp_path, monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "Test Suite test@example.com")
-    client = SECClient(cache=FileCache(cache_dir=tmp_path))
+    client = SECConnector(cache=FileCache(cache_dir=tmp_path))
 
     monkeypatch.setattr(client, "get_frame", lambda *a, **k: FAKE_FRAME)
     monkeypatch.setattr(client, "get_submissions", lambda cik10: SUBMISSIONS_BY_CIK[cik10])

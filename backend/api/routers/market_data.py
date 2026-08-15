@@ -48,7 +48,7 @@ def get_market_data(
     # data. If SEC lookup fails, we still return the live market data --
     # persistence is a bonus, not a prerequisite for this endpoint.
     try:
-        cik10 = sec_client.get_cik(ticker)
+        cik10 = sec_client.get_company_cik(ticker)
         company = get_or_create_company(session, ticker=ticker, cik10=cik10)
         as_of_date = _parse_as_of_date(snapshot.as_of)
         upsert_market_data_snapshot(

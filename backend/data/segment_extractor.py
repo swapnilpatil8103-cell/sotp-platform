@@ -9,30 +9,28 @@ in the filing's actual XBRL instance document. Since ~2019 that instance is
 embedded as *inline XBRL* directly in the primary 10-K HTML document filers
 submit to EDGAR.
 
-This module fetches that primary document (via `backend.data.xbrl_instance`),
-parses its contexts/facts, and reconstructs per-segment financial facts with
-the same full-provenance discipline as `backend.data.normalizer`:
-REPORTED/MISSING data_status, source, xbrl_tag, accession_number, source_url.
-It never fabricates a segment metric that isn't disclosed. If no
-segment-dimensional facts are found at all (single-segment filer, or a filer
-whose segment note isn't XBRL-tagged), it returns an empty segment list with
-an explanatory note.
+This module fetches that primary document via `SECConnector.get_filing_xbrl`
+(`backend.services.sec_client`), parses its contexts/facts, and reconstructs
+per-segment financial facts with the same full-provenance discipline as
+`backend.data.normalizer`: REPORTED/MISSING data_status, source, xbrl_tag,
+accession_number, source_url. It never fabricates a segment metric that
+isn't disclosed. If no segment-dimensional facts are found at all
+(single-segment filer, or a filer whose segment note isn't XBRL-tagged), it
+returns an empty segment list with an explanatory note.
 """
 
 from __future__ import annotations
 
 from datetime import date
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from backend.data.xbrl_instance import (
-    XbrlContext,
-    XbrlFact,
-    fetch_inline_xbrl_document,
-    parse_inline_xbrl,
-)
+from backend.data.xbrl_instance import XbrlContext, XbrlFact
 from backend.models.enums import DataStatus
 from backend.models.segment_financial_fact import SegmentFinancialFact
+
+if TYPE_CHECKING:
+    from backend.services.sec_client import SECConnector
 
 SEC_SOURCE = "SEC XBRL (inline, filing instance)"
 
@@ -224,7 +222,7 @@ def extract_segments_from_instance(
 
 
 def extract_segments_for_filing(
-    user_agent: str,
+    connector: "SECConnector",
     cik10: str,
     fiscal_year: int,
     fiscal_period: str,
@@ -232,11 +230,13 @@ def extract_segments_for_filing(
 ) -> SegmentExtractionResult:
     """Fetch + parse a specific filing's inline-XBRL document and extract segments.
 
-    ``filing`` is a dict as returned by ``SECClient.get_latest_filings`` (has
-    ``source_url`` pointing at the primary document and ``accession_number``).
+    ``filing`` is a dict as returned by ``SECConnector.get_latest_filings`` /
+    ``get_filing_metadata`` (has ``source_url`` pointing at the primary
+    document and ``accession_number``). ``connector`` is used (rather than a
+    bare user-agent string) so the fetch goes through the connector's shared
+    caching/rate-limiting/typed-error handling via ``get_filing_xbrl``.
     """
-    document = fetch_inline_xbrl_document(filing["source_url"], user_agent=user_agent)
-    contexts, facts = parse_inline_xbrl(document)
+    contexts, facts = connector.get_filing_xbrl(filing["source_url"])
     return extract_segments_from_instance(
         contexts,
         facts,

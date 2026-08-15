@@ -38,7 +38,7 @@ def get_company(
     client=Depends(get_sec_client),
 ) -> CompanyRead:
     try:
-        cik10 = client.get_cik(ticker)
+        cik10 = client.get_company_cik(ticker)
         submissions = client.get_submissions(cik10)
     except SECNotFoundError:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -89,7 +89,7 @@ def get_company_id(
 def get_company_filings(ticker: str):
     client = get_sec_client()
     try:
-        cik10 = client.get_cik(ticker)
+        cik10 = client.get_company_cik(ticker)
         filings = client.get_latest_filings(cik10, form_types=("10-K", "10-Q"))
     except SECNotFoundError:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
@@ -114,7 +114,7 @@ def get_company_facts(
 ) -> CompanyFactsRead:
     client = get_sec_client()
     try:
-        cik10 = client.get_cik(ticker)
+        cik10 = client.get_company_cik(ticker)
     except SECNotFoundError:
         raise HTTPException(status_code=404, detail=f"Unknown ticker or no XBRL facts available: {ticker}")
     except SECRateLimitError:
@@ -198,7 +198,7 @@ def get_peer_candidates(
     used to define "who reported this period" (default Revenues).
     """
     try:
-        cik10 = client.get_cik(ticker)
+        cik10 = client.get_company_cik(ticker)
         result = discover_peer_candidates(
             client,
             target_cik10=cik10,

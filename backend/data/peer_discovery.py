@@ -34,7 +34,7 @@ from typing import Any, Optional
 from backend.data.business_classifier import BusinessClassification, classify_business
 from backend.data.concept_mapping import resolve_concept
 from backend.data.normalizer import _pick_fact_for_period
-from backend.services.sec_client import SECClient, SECError
+from backend.services.sec_client import SECConnector, SECError
 
 # Concept used to define the frame -- i.e. which companies to consider at all.
 # Revenue is the most universally-reported duration concept across industries.
@@ -98,7 +98,7 @@ def _ticker_for_cik(cik10: str, ticker_map: dict[str, str]) -> Optional[str]:
     return None
 
 
-def _fetch_candidate_financials(client: SECClient, cik10: str) -> list[CandidateFinancialFact]:
+def _fetch_candidate_financials(client: SECConnector, cik10: str) -> list[CandidateFinancialFact]:
     """Pull real reported values for PEER_FINANCIAL_CONCEPTS for this CIK's most
     recent available FY, using the existing concept_mapping/normalizer machinery
     (no duplication of tag-resolution logic). MISSING (never fabricated) when a
@@ -142,7 +142,7 @@ def _fetch_candidate_financials(client: SECClient, cik10: str) -> list[Candidate
 
 
 def discover_peer_candidates(
-    client: SECClient,
+    client: SECConnector,
     target_cik10: str,
     fiscal_year: int,
     quarter: Optional[int] = None,

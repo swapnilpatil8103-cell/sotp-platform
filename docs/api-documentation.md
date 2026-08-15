@@ -92,7 +92,7 @@ Phase 10 addition. Query params: `fiscal_year` (required int), `quarter`
 `"Revenues"`, a US-GAAP duration tag), `max_shortlist` (default 15).
 
 Discovers candidate comps peers via the real SEC XBRL **frames** API
-(`backend/services/sec_client.py::SECClient.get_frame`,
+(`backend/services/sec_client.py::SECConnector.get_frame`,
 `backend/data/peer_discovery.py::discover_peer_candidates`): pulls every
 filer that reported `frame_concept` for the period, ranks by proximity to
 the target's own reported value, takes a bounded shortlist, cross-references
@@ -137,7 +137,7 @@ the live data is still returned; persistence is not a precondition.
 
 ### `GET /filings?ticker=XYZ`
 Thin wrapper: delegates directly to `GET /companies/{ticker}/filings`
-(same response shape, same errors) to avoid duplicating `SECClient` error
+(same response shape, same errors) to avoid duplicating `SECConnector` error
 handling. Query param `ticker` is **required**.
 - Errors: `400` if `ticker` omitted; otherwise identical to
   `/companies/{ticker}/filings` above.

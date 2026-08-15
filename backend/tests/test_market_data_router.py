@@ -1,4 +1,4 @@
-"""Unit tests for GET /companies/{ticker}/market-data (mocked MarketDataClient/SECClient)."""
+"""Unit tests for GET /companies/{ticker}/market-data (mocked MarketDataClient/SECConnector)."""
 
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ class _FakeMarketDataClient:
         return self._snapshot
 
 
-class _FakeSECClient:
-    def get_cik(self, ticker):
+class _FakeSECConnector:
+    def get_company_cik(self, ticker):
         return "0000320193"
 
 
@@ -47,7 +47,7 @@ def _fake_snapshot():
 
 def test_market_data_endpoint_returns_snapshot(monkeypatch):
     app.dependency_overrides[deps.get_market_data_client] = lambda: _FakeMarketDataClient(snapshot=_fake_snapshot())
-    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECClient()
+    app.dependency_overrides[deps.get_sec_client] = lambda: _FakeSECConnector()
     try:
         resp = client.get("/companies/AAPL/market-data")
         assert resp.status_code == 200

@@ -125,7 +125,7 @@ def get_memo(
     # resolved -- but a Company row alone (no valuation run) is still
     # "insufficient data" below.
     try:
-        cik10 = client.get_cik(ticker)
+        cik10 = client.get_company_cik(ticker)
     except SECNotFoundError:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     except SECRateLimitError:
