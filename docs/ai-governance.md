@@ -124,6 +124,27 @@ Note: item 5 above ("AI calls are logged" to the audit trail) and the
 `AssumptionDecision` persistence/approval flow itself are Phase 7 work —
 Phase 6 produces the typed proposal data those will consume.
 
+### Swappable provider: Ollama
+
+`backend/ai/ollama_adapter.py` (`OllamaAdapter`) is a second, real
+`AIAdapter` implementation, calling a local Ollama installation's REST API
+(`POST /api/chat`, default `http://localhost:11434`, model configurable via
+`OLLAMA_MODEL`, default `llama3.1:8b`) instead of the hosted Gemini API. It
+is unauthenticated (no API key -- Ollama runs locally) and raises the same
+typed errors as `GeminiAdapter`: `AIUnavailableError` if the Ollama service
+isn't running, or if the configured model hasn't been pulled yet (with a
+message telling the user to run `ollama pull <model>`), and
+`AIResponseParseError` on a malformed response. All the governance rules
+above apply identically regardless of which provider is active -- the
+`AIAdapter` interface, the guardrail in `validation.py`, and the ABSTAIN
+path are provider-agnostic by construction.
+
+`backend/ai/factory.py`'s `get_ai_adapter()` reads the `AI_PROVIDER` env var
+(`"gemini"` default, or `"ollama"`) and constructs the corresponding
+adapter; `backend/api/routers/scenarios.py` and `backend/api/routers/
+memo.py` call this factory instead of hardcoding a provider, so switching
+providers is a config change, not a code change.
+
 ## Phase 7: the approve/edit/reject workflow, as implemented
 
 `backend/governance/approval.py` is the only place that turns a Phase 6 AI

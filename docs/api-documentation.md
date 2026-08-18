@@ -115,6 +115,63 @@ in an actual comps run — see `docs/valuation-methodology.md`.
   value, unit, xbrl_tag, data_status}...]}...], governance_note}`.
 - Errors: `404` unknown ticker; `503` SEC rate-limited or unavailable.
 
+### `GET /companies/{ticker}/insider-transactions`
+Query params: `limit` (default 20 — number of most-recent Form 3/4/5 filings
+to fetch and parse; each filing requires its own XML fetch, so this bounds
+the request fan-out, not the transaction count returned).
+
+Real Form 3/4/5 insider transaction history for `ticker` as **issuer** (SEC
+submissions data for a company lists every Form 3/4/5 filed about it, so
+this is a straightforward ticker→CIK→filings→parse→persist flow, unlike
+institutional holdings below). Uses `SECConnector.get_insider_filings` +
+`get_ownership_document`; persists every transaction row via
+`upsert_insider_transactions` (natural key: accession_number +
+reporting_owner_cik + security_title + transaction_date). A filing that
+fails to fetch/parse is skipped rather than failing the whole request.
+- Response: `{ticker, cik, company_id, transaction_count, transactions: [
+  {reporting_owner_name, reporting_owner_cik, is_officer, is_director,
+  is_ten_percent_owner, is_other, officer_title, transaction_table
+  ("nonDerivative"|"derivative"), security_title, transaction_date,
+  transaction_code, shares_transacted, price_per_share,
+  transaction_acquired_disposed_code, shares_owned_after, ownership_type
+  ("D"|"I"), accession_number, source, source_url, filing_date,
+  data_status}...]}`. Fields genuinely absent from a given filing's XML
+  come back `null`/`data_status="MISSING"` — never fabricated.
+- Errors: `404` unknown ticker or no Form 3/4/5 filings found; `503` SEC
+  rate-limited or unavailable.
+
+### `GET /companies/{ticker}/institutional-holdings`
+Query params: `filer_cik` (**required** — a known institutional manager's
+CIK, e.g. Berkshire Hathaway's `0001067983`), `accession_number` (optional,
+defaults to the filer's latest 13F-HR), `issuer_contains` (optional,
+case-insensitive substring match against `nameOfIssuer`).
+
+**Real constraint, not a simplification:** 13F filings are filed BY
+institutional investment managers ABOUT their own holdings — SEC does not
+publish a reverse index from issuer to the 13F filers holding it, so there
+is no ticker-only "who holds this company" lookup to build. This endpoint
+is filer-keyed: `ticker` in the path only resolves/persists the calling
+company's own `Company` row (for consistency with the rest of this router)
+and does **not** filter the filer's holdings by itself — use
+`issuer_contains` for that. See `docs/data-model.md` for the full
+investigation of SEC's 13F data shape that led to this design.
+
+Uses `SECConnector.get_13f_holdings` (cover page + information table,
+discovered via `index.json` since the information-table filename isn't
+derivable from `primaryDocument`); persists via
+`upsert_institutional_holdings` (natural key: filer_cik + accession_number +
+cusip).
+- Response: `{ticker, filer_cik, filer_name, accession_number,
+  period_of_report, issuer_contains, holding_count, holdings: [
+  {filer_cik, filer_name, issuer_name, title_of_class, cusip,
+  period_of_report, value (thousands of USD, per SEC convention),
+  shares_or_principal_amount, shares_or_principal_type ("SH"|"PRN"),
+  investment_discretion, voting_authority_sole/shared/none,
+  accession_number, source, source_url, filing_date, data_status}...],
+  governance_note}`.
+- Errors: `404` unknown ticker, unknown filer CIK, or no 13F-HR filings
+  found for that filer; `503` SEC rate-limited or unavailable.
+
 ---
 
 ## Market data — `backend/api/routers/market_data.py` (prefix `/companies`)

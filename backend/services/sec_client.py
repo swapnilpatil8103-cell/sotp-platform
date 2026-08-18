@@ -45,6 +45,14 @@ from typing import Any, Optional
 
 import httpx
 
+from backend.data.ownership_xml import (
+    Form13FCoverPage,
+    Form13FHolding,
+    OwnershipDocument,
+    parse_13f_cover_page,
+    parse_13f_information_table,
+    parse_ownership_document,
+)
 from backend.data.xbrl_instance import XbrlContext, XbrlFact, parse_inline_xbrl
 from backend.services.cache import FileCache
 
@@ -54,6 +62,7 @@ COMPANY_FACTS_URL_TMPL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik10}.
 COMPANY_CONCEPT_URL_TMPL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik10}/{taxonomy}/{tag}.json"
 FRAMES_URL_TMPL = "https://data.sec.gov/api/xbrl/frames/{taxonomy}/{tag}/{unit}/{period}.json"
 ARCHIVES_URL_TMPL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_nodash}/{filename}"
+ARCHIVES_INDEX_JSON_URL_TMPL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_nodash}/index.json"
 
 # Frames responses are large, cover a whole historical quarter/year of
 # already-filed data, and never change once published -- cache them much
@@ -434,3 +443,133 @@ class SECConnector:
         """
         document = self._fetch_document(source_url, cache_ttl_seconds=FILING_DOCUMENT_CACHE_TTL_SECONDS)
         return parse_inline_xbrl(document)
+
+    # --------------------------------------------------- Insider ownership
+
+    def get_insider_filings(
+        self, cik10: str, form_types: tuple[str, ...] = ("3", "4", "5")
+    ) -> list[dict[str, Any]]:
+        """List Form 3/4/5 (insider ownership) filings for a company (as
+        issuer) from its submissions data, most-recent-first.
+
+        Each result dict has the same shape as `get_filing_metadata`/
+        `get_latest_filings` (form, accession_number, filing_date,
+        period_of_report, primary_document, source_url) -- unlike
+        `get_latest_filings`, this returns *every* matching filing, not just
+        the single latest one per form type, since insider transaction
+        history is inherently a list.
+
+        Note: `submissions.filings.recent` only covers a rolling window of
+        recent filings (older ones move to paginated `filings.files` entries
+        SEC's submissions API links to separately); this method covers the
+        `recent` window, consistent with every other submissions-derived
+        method on this connector (`get_latest_filings`, `get_filing_metadata`).
+        """
+        submissions = self.get_submissions(cik10)
+        recent = submissions.get("filings", {}).get("recent", {})
+        forms = recent.get("form", [])
+        accession_numbers = recent.get("accessionNumber", [])
+        filing_dates = recent.get("filingDate", [])
+        report_dates = recent.get("reportDate", [])
+        primary_docs = recent.get("primaryDocument", [])
+
+        results: list[dict[str, Any]] = []
+        for i, form in enumerate(forms):
+            if form not in form_types:
+                continue
+            results.append(
+                self._build_filing_metadata(cik10, i, forms, accession_numbers, filing_dates, report_dates, primary_docs)
+            )
+        return results
+
+    def list_filing_directory(self, cik10: str, accession_number: str) -> list[str]:
+        """List every filename in a filing's EDGAR Archives directory via
+        `index.json`. Used to discover document filenames (e.g. a 13F
+        information table) that aren't derivable from `primaryDocument`
+        alone."""
+        accession_nodash = accession_number.replace("-", "")
+        url = ARCHIVES_INDEX_JSON_URL_TMPL.format(cik_int=int(cik10), accession_nodash=accession_nodash)
+        payload = self._fetch_json(url, cache_ttl_seconds=FILING_DOCUMENT_CACHE_TTL_SECONDS)
+        items = payload.get("directory", {}).get("item", [])
+        return [item["name"] for item in items if "name" in item]
+
+    @staticmethod
+    def _raw_document_filename(primary_document: str) -> str:
+        """SEC's `primaryDocument` for Form 3/4/5 and 13F filings often points
+        at a rendered XSLT-stylesheet path (e.g.
+        `xslF345X06/form4.xml`, `xslForm13F_X02/primary_doc.xml`) rather than
+        the raw data XML, which actually sits at the accession root (e.g.
+        `form4.xml`, `primary_doc.xml`). Confirmed against real filings
+        (AAPL Form 4 accession 0001140361-26-032884, Berkshire 13F-HR
+        accession 0001193125-26-352200): stripping the leading
+        `xsl.../` path segment recovers the real root filename in both
+        cases."""
+        if "/" in primary_document:
+            return primary_document.rsplit("/", 1)[-1]
+        return primary_document
+
+    def get_ownership_document(self, cik10: str, accession_number: str) -> OwnershipDocument:
+        """Fetch + parse a Form 3/4/5 ownership XML document into structured
+        data: reporting owner identity/relationship, and every non-derivative
+        and derivative transaction row (security title, transaction code,
+        shares, price, shares owned after, direct/indirect ownership).
+
+        Fields genuinely absent from a given filing's XML (e.g. a Form 4
+        composed only of non-derivative transactions has no derivative rows
+        at all) come back as `None`/an empty list -- never fabricated. See
+        `backend.data.ownership_xml` for the parser and the real Apple Inc.
+        Form 4 example it was built against.
+        """
+        metadata = self.get_filing_metadata(cik10, accession_number)
+        filename = self._raw_document_filename(metadata["primary_document"])
+        url = ARCHIVES_URL_TMPL.format(
+            cik_int=int(cik10), accession_nodash=accession_number.replace("-", ""), filename=filename
+        )
+        document = self._fetch_document(url, cache_ttl_seconds=FILING_DOCUMENT_CACHE_TTL_SECONDS)
+        return parse_ownership_document(document)
+
+    # -------------------------------------------------- 13F institutional holdings
+
+    def get_13f_holdings(self, cik10: str, accession_number: str) -> tuple[Form13FCoverPage, list[Form13FHolding]]:
+        """Fetch + parse a 13F-HR filing's information table into structured
+        holdings, for the institutional manager identified by `cik10` (the
+        13F *filer*, not the companies it holds positions in -- see the
+        module-level note in `backend.data.ownership_xml` and
+        `docs/data-model.md` for the full explanation of why 13F data is
+        filer-centric, not issuer-centric).
+
+        Returns `(cover_page, holdings)`: the cover page (`primary_doc.xml`)
+        carries `period_of_report` and the filing manager's name, which the
+        information table document itself does not include. The information
+        table's filename isn't derivable from `primaryDocument` (unlike Form
+        3/4/5 -- see `_raw_document_filename`), so this method lists the
+        filing's Archives directory (`list_filing_directory`) and picks the
+        one `.xml` file that isn't `primary_doc.xml`.
+        """
+        metadata = self.get_filing_metadata(cik10, accession_number)
+        accession_nodash = accession_number.replace("-", "")
+
+        cover_filename = self._raw_document_filename(metadata["primary_document"])
+        cover_url = ARCHIVES_URL_TMPL.format(cik_int=int(cik10), accession_nodash=accession_nodash, filename=cover_filename)
+        cover_bytes = self._fetch_document(cover_url, cache_ttl_seconds=FILING_DOCUMENT_CACHE_TTL_SECONDS)
+        cover_page = parse_13f_cover_page(cover_bytes)
+
+        filenames = self.list_filing_directory(cik10, accession_number)
+        info_table_filename = next(
+            (
+                name
+                for name in filenames
+                if name.lower().endswith(".xml") and name != cover_filename and "index" not in name.lower()
+            ),
+            None,
+        )
+        if info_table_filename is None:
+            raise SECNotFoundError(
+                f"No 13F information table document found for CIK {cik10} accession {accession_number}"
+            )
+
+        info_url = ARCHIVES_URL_TMPL.format(cik_int=int(cik10), accession_nodash=accession_nodash, filename=info_table_filename)
+        info_bytes = self._fetch_document(info_url, cache_ttl_seconds=FILING_DOCUMENT_CACHE_TTL_SECONDS)
+        holdings = parse_13f_information_table(info_bytes)
+
+        return cover_page, holdings

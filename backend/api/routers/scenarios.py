@@ -21,7 +21,7 @@ from sqlmodel import Session
 
 from backend.ai.adapter import AIAdapter
 from backend.ai.errors import AIError
-from backend.ai.gemini_adapter import GeminiAdapter
+from backend.ai.factory import get_ai_adapter
 from backend.ai.tasks.reverse_valuation_explainer import explain_reverse_valuation
 from backend.ai.tasks.risk_explanation import score_strategic_and_execution_risk
 from backend.ai.tasks.value_unlock_ideas import ACTION_TYPE_CODES, propose_value_unlock_ideas
@@ -36,7 +36,7 @@ router = APIRouter(prefix="/scenarios", tags=["scenarios"])
 
 
 def _get_adapter() -> AIAdapter:
-    return GeminiAdapter()
+    return get_ai_adapter()
 
 
 # --------------------------------------------------------------------------

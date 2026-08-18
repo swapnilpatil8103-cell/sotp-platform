@@ -51,9 +51,13 @@ out explicitly below rather than glossed over.
   functions over typed Pydantic inputs (`schemas/valuation.py`); no I/O, no
   AI calls, fully unit-testable in isolation. This is the single place
   dollar figures are computed.
-- **`ai/`** — AI reasoning layer: `gemini_adapter.py` (Gemini API client
-  behind the `AIAdapter` protocol, swappable for `FakeAIAdapter` in tests),
-  `tasks/` (one narrowly-scoped function per AI use case: assumption
+- **`ai/`** — AI reasoning layer: `gemini_adapter.py` (Gemini API client) and
+  `ollama_adapter.py` (local Ollama REST client, no API key needed) both
+  implement the `AIAdapter` protocol (swappable for `FakeAIAdapter` in
+  tests); `factory.py`'s `get_ai_adapter()` picks between them at call time
+  via the `AI_PROVIDER` env var (`gemini` default, or `ollama`) so callers
+  (`api/routers/scenarios.py`, `api/routers/memo.py`) never hardcode a
+  provider. `tasks/` (one narrowly-scoped function per AI use case: assumption
   recommendation, methodology recommendation, peer recommendation,
   devil's-advocate critique, research summary, memo section generation,
   value-unlock idea proposal, risk explanation, reverse-valuation
@@ -115,6 +119,52 @@ into one consistent surface, all sharing the same `FileCache`-backed caching,
   module (it's pure and dependency-light), but the fetch now goes through
   this connector's shared caching/rate-limiting/typed-error handling instead
   of a bare `httpx.get`. `segment_extractor.py` is the primary consumer.
+- `get_insider_filings(cik10, form_types=("3","4","5"))` — every Form 3/4/5
+  filing an issuer has on file (accession numbers, dates), from the same
+  `submissions.filings.recent` window every other submissions-derived method
+  uses.
+- `list_filing_directory(cik10, accession_number)` — lists every filename in
+  a filing's EDGAR Archives directory via `index.json`; used to discover
+  document filenames that aren't derivable from `primaryDocument` alone
+  (the 13F information-table file).
+- `get_ownership_document(cik10, accession_number)` — fetch + parse a single
+  Form 3/4/5 ownership XML document (reporting owner identity/relationship,
+  every non-derivative/derivative transaction row) via
+  `backend/data/ownership_xml.py`.
+- `get_13f_holdings(cik10, accession_number)` — fetch + parse a 13F-HR
+  filing's cover page (`primary_doc.xml`) and information table into a
+  filer's structured holdings, also via `backend/data/ownership_xml.py`.
+  `cik10` here is the **institutional filer's** CIK, not an issuer's — see
+  "Insider transactions & institutional holdings" below.
+
+## Insider transactions & institutional holdings
+
+Added directly against SEC's free public data (no third-party wrapper
+services) after evaluating and rejecting five paid SEC-data-wrapper vendors
+(StockFit, Edgrapi, Filingrail, Hotstoks, BriefTape) as unnecessary re-wraps
+of data already reachable from EDGAR, violating the project's free-first,
+no-paid-dependency principle.
+
+- **Insider transactions (Form 3/4/5)** are issuer-centric: SEC's
+  submissions data for a company lists every Form 3/4/5 filed *about* that
+  company, so `GET /companies/{ticker}/insider-transactions` works exactly
+  like the rest of this API — resolve ticker → CIK → filings → parse →
+  persist.
+- **Institutional holdings (13F-HR)** are filer-centric, not issuer-centric:
+  a 13F is filed *by* an institutional investment manager *about* its own
+  portfolio; SEC does not publish a reverse index ("which 13F filers hold
+  ticker X"). `GET /companies/{ticker}/institutional-holdings` therefore
+  requires an explicit `filer_cik` (a known institutional manager, e.g.
+  Berkshire Hathaway's `0001067983`) and returns that filer's holdings,
+  optionally narrowed with `issuer_contains` (a substring match against
+  `nameOfIssuer`). This is a real constraint of SEC's data shape, not a
+  simplification — see `docs/data-model.md` and `docs/api-documentation.md`
+  for the full discussion.
+- Both real document shapes (a real Apple Inc. Form 4 and a real Berkshire
+  Hathaway 13F-HR information table) were fetched and inspected before
+  writing the parser (`backend/data/ownership_xml.py`) — see that module's
+  docstring and `backend/tests/fixtures/ownership_samples.py` for the
+  real (Form 4) / real-trimmed (13F) fixtures used in tests.
 
 ## Deviations from the original master spec
 

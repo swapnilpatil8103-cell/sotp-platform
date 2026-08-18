@@ -15,6 +15,8 @@ from sqlmodel import Session, select
 
 from backend.models.company import Company
 from backend.models.financial_fact import FinancialFact
+from backend.models.institutional_holding import InstitutionalHolding
+from backend.models.insider_transaction import InsiderTransaction
 from backend.models.market_data_snapshot import MarketDataSnapshot
 from backend.models.segment import Segment
 from backend.models.segment_financial_fact import SegmentFinancialFact
@@ -188,3 +190,98 @@ def upsert_market_data_snapshot(session: Session, company_id: int, snapshot: Mar
     session.commit()
     session.refresh(snapshot)
     return snapshot
+
+
+def upsert_insider_transactions(
+    session: Session, company_id: int, transactions: Iterable[InsiderTransaction]
+) -> list[InsiderTransaction]:
+    """Insert or update InsiderTransaction rows, keyed on
+    (accession_number, reporting_owner_cik, security_title, transaction_date)
+    so re-ingesting the same Form 3/4/5 filing never duplicates a row."""
+    persisted: list[InsiderTransaction] = []
+    for txn in transactions:
+        existing = session.exec(
+            select(InsiderTransaction).where(
+                InsiderTransaction.accession_number == txn.accession_number,
+                InsiderTransaction.reporting_owner_cik == txn.reporting_owner_cik,
+                InsiderTransaction.security_title == txn.security_title,
+                InsiderTransaction.transaction_date == txn.transaction_date,
+            )
+        ).first()
+        if existing is not None:
+            existing.company_id = company_id
+            existing.reporting_owner_name = txn.reporting_owner_name
+            existing.is_officer = txn.is_officer
+            existing.is_director = txn.is_director
+            existing.is_ten_percent_owner = txn.is_ten_percent_owner
+            existing.is_other = txn.is_other
+            existing.officer_title = txn.officer_title
+            existing.transaction_table = txn.transaction_table
+            existing.transaction_code = txn.transaction_code
+            existing.shares_transacted = txn.shares_transacted
+            existing.price_per_share = txn.price_per_share
+            existing.transaction_acquired_disposed_code = txn.transaction_acquired_disposed_code
+            existing.shares_owned_after = txn.shares_owned_after
+            existing.ownership_type = txn.ownership_type
+            existing.source = txn.source
+            existing.source_url = txn.source_url
+            existing.filing_date = txn.filing_date
+            existing.data_status = txn.data_status
+            existing.updated_at = _utcnow()
+            session.add(existing)
+            persisted.append(existing)
+        else:
+            txn.company_id = company_id
+            session.add(txn)
+            persisted.append(txn)
+    session.commit()
+    for t in persisted:
+        session.refresh(t)
+    return persisted
+
+
+def upsert_institutional_holdings(
+    session: Session, holdings: Iterable[InstitutionalHolding]
+) -> list[InstitutionalHolding]:
+    """Insert or update InstitutionalHolding rows, keyed on
+    (filer_cik, accession_number, cusip) so re-ingesting the same 13F
+    information table never duplicates a row.
+
+    Unlike the other upsert helpers here, this one takes no `company_id` --
+    13F holdings are filer-centric, not issuer-centric (see
+    `backend.models.institutional_holding` and `docs/data-model.md`)."""
+    persisted: list[InstitutionalHolding] = []
+    for holding in holdings:
+        existing = session.exec(
+            select(InstitutionalHolding).where(
+                InstitutionalHolding.filer_cik == holding.filer_cik,
+                InstitutionalHolding.accession_number == holding.accession_number,
+                InstitutionalHolding.cusip == holding.cusip,
+            )
+        ).first()
+        if existing is not None:
+            existing.filer_name = holding.filer_name
+            existing.issuer_name = holding.issuer_name
+            existing.title_of_class = holding.title_of_class
+            existing.period_of_report = holding.period_of_report
+            existing.value = holding.value
+            existing.shares_or_principal_amount = holding.shares_or_principal_amount
+            existing.shares_or_principal_type = holding.shares_or_principal_type
+            existing.investment_discretion = holding.investment_discretion
+            existing.voting_authority_sole = holding.voting_authority_sole
+            existing.voting_authority_shared = holding.voting_authority_shared
+            existing.voting_authority_none = holding.voting_authority_none
+            existing.source = holding.source
+            existing.source_url = holding.source_url
+            existing.filing_date = holding.filing_date
+            existing.data_status = holding.data_status
+            existing.updated_at = _utcnow()
+            session.add(existing)
+            persisted.append(existing)
+        else:
+            session.add(holding)
+            persisted.append(holding)
+    session.commit()
+    for h in persisted:
+        session.refresh(h)
+    return persisted

@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from backend.ai.adapter import AIAdapter
-from backend.ai.gemini_adapter import GeminiAdapter
+from backend.ai.factory import get_ai_adapter
 from backend.ai.tasks.memo_generator import MemoSectionResult, generate_memo_section
 from backend.api.deps import get_sec_client
 from backend.data.persistence import get_or_create_company
@@ -43,7 +43,7 @@ MEMO_SECTIONS = (
 
 
 def _get_adapter() -> AIAdapter:
-    return GeminiAdapter()
+    return get_ai_adapter()
 
 
 class MemoResponse(BaseModel):

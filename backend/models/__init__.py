@@ -22,6 +22,8 @@ from .valuation_run import ValuationRun
 from .assumption_decision import AssumptionDecision
 from .audit_log_entry import AuditLogEntry
 from .market_data_snapshot import MarketDataSnapshot
+from .insider_transaction import InsiderTransaction
+from .institutional_holding import InstitutionalHolding
 
 __all__ = [
     "DataStatus",
@@ -37,4 +39,6 @@ __all__ = [
     "AssumptionDecision",
     "AuditLogEntry",
     "MarketDataSnapshot",
+    "InsiderTransaction",
+    "InstitutionalHolding",
 ]

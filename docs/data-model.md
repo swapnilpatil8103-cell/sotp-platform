@@ -27,6 +27,20 @@ system is traceable to a source filing; nothing is stored without provenance.
 - **AuditLogEntry** — immutable append-only log of every meaningful action
   (data fetch, valuation run, assumption decision, override) for
   accountability and reproducibility.
+- **InsiderTransaction** — one Form 3/4/5 transaction row, scoped to the
+  issuer (`company_id`). Carries the reporting owner's identity
+  (`reporting_owner_name`/`reporting_owner_cik`), relationship to the issuer
+  (`is_officer`/`is_director`/`is_ten_percent_owner`/`is_other` — modeled as
+  independent booleans since a real reporting owner can hold multiple
+  relationships at once, e.g. an officer who is also a director), and the
+  transaction itself (security title, date, code, shares, price,
+  shares-owned-after, direct/indirect ownership type). Sourced from
+  `SECConnector.get_ownership_document` — see "Insider transactions &
+  institutional holdings" below.
+- **InstitutionalHolding** — one 13F-HR information-table row: a single
+  position an institutional manager (`filer_cik`/`filer_name`) reported
+  holding in `issuer_name` (identified by `cusip`, no `company_id` FK — see
+  below). Sourced from `SECConnector.get_13f_holdings`.
 - **MarketDataSnapshot** — one market-data "as of" point for a Company
   (price, currency, market_cap, shares_outstanding, beta, dividend_yield,
   last_dividend_value/date, `as_of` date, `source`, `fetched_at`). Sourced
@@ -58,6 +72,11 @@ at the DB level, and `backend/data/persistence.py` upserts against them:
 - `SegmentFinancialFact`: unique on `(segment_id, concept, period, xbrl_tag)`.
 - `MarketDataSnapshot`: unique on `(company_id, as_of)` — repeated fetches on
   the same "as of" date update the existing row instead of creating a new one.
+- `InsiderTransaction`: unique on `(accession_number, reporting_owner_cik,
+  security_title, transaction_date)` — re-parsing the same Form 3/4/5 filing
+  never duplicates a transaction row.
+- `InstitutionalHolding`: unique on `(filer_cik, accession_number, cusip)` —
+  re-parsing the same 13F information table never duplicates a position row.
 
 `backend/db.py` provides the engine/session factory (`DATABASE_URL`-driven);
 `backend/alembic.ini` + `backend/migrations/` manage schema changes. Tests
@@ -110,6 +129,54 @@ income extracted correctly with full REPORTED provenance; D&A/capex/assets
 came back MISSING (not disclosed at the segment level in that filing),
 exactly as intended.
 ```
+
+## Insider transactions & institutional holdings
+
+Both were added directly against SEC's free public data (Form 3/4/5 and
+13F-HR filings), extending `SECConnector` rather than integrating any of
+five evaluated paid SEC-data-wrapper services — see
+`docs/architecture.md`'s "Insider transactions & institutional holdings"
+section for the rejection rationale.
+
+**Real document shapes** (inspected before writing the parser,
+`backend/data/ownership_xml.py`):
+
+- A Form 3/4/5's actual data XML (`ownershipDocument` root) lives at the
+  filing's Archives root under a plain filename (e.g. `form4.xml`) — *not*
+  at the path SEC's `submissions.filings.recent.primaryDocument` lists
+  (which points at an XSLT-stylesheet-rendered path, e.g.
+  `xslF345X06/form4.xml`). `SECConnector._raw_document_filename` strips the
+  `xsl.../` prefix to recover the real filename; confirmed against a real
+  Apple Inc. Form 4 (CIK 0000320193, accession 0001140361-26-032884).
+  `nonDerivativeTransaction` and `derivativeTransaction` rows carry
+  different field sets in practice (e.g. derivative rows add
+  exercise-price/expiration-date fields); a field a given filing's XML
+  genuinely omits is stored `None`/`data_status=MISSING`, never guessed.
+- A 13F-HR filing has **two** XML documents: `primary_doc.xml` (the cover
+  page — filer name, `periodOfReport`, report type; no holdings) and a
+  separately-named information-table file (e.g. `56757.xml` — the filename
+  is filer-assigned and not predictable, so `SECConnector.get_13f_holdings`
+  lists the filing's Archives directory via `index.json` and picks the
+  `.xml` file that isn't `primary_doc.xml`). Confirmed against a real
+  Berkshire Hathaway Inc 13F-HR (CIK 0001067983, accession
+  0001193125-26-352200, period of report 2026-06-30): each `<infoTable>`
+  row carries `nameOfIssuer`, `titleOfClass`, `cusip`, `value` (reported in
+  **thousands of USD** per SEC convention), `shrsOrPrnAmt` (shares/principal
+  amount + type), `investmentDiscretion`, and `votingAuthority`
+  (Sole/Shared/None).
+
+**Why 13F holdings are filer-keyed, not issuer-keyed:** a 13F is filed *by*
+an institutional investment manager *about* its own portfolio; SEC does not
+publish a reverse index mapping an issuer to the filers holding it. There is
+no SEC endpoint or dataset that answers "which 13F filers hold ticker X"
+directly. `InstitutionalHolding.filer_cik`/`filer_name` are therefore the
+row's primary identity, with `issuer_name`/`cusip` describing the position —
+and `GET /companies/{ticker}/institutional-holdings` (see
+`docs/api-documentation.md`) requires an explicit `filer_cik` rather than
+promising a ticker-only lookup it cannot actually support. `cusip` is stored
+as a plain string, not a foreign key to `Company` — SEC's 13F data carries
+no issuer CIK, only name + CUSIP, and this project does not perform
+CUSIP-to-CIK resolution.
 
 ## Market data freshness semantics
 
