@@ -21,7 +21,20 @@ out explicitly below rather than glossed over.
   validation via Pydantic, dependency-injected clients (`api/deps.py`).
   Contains no business logic itself; delegates to `services`/`data`/
   `valuation`/`governance`. No auth layer exists (never in scope for
-  Phases 1–9 — see the Definition-of-Done audit).
+  Phases 1–9 — see the Definition-of-Done audit). One narrow concurrency
+  exception: `api/routers/segments.py`'s `get_company_segments` runs
+  `SECConnector.get_latest_filings` (submissions) and `get_company_facts`
+  on a `concurrent.futures.ThreadPoolExecutor` since neither depends on the
+  other's output, both depending only on the resolved CIK — this shortens
+  the real dependency chain for a first-time (uncached) segment extraction
+  by overlapping those two SEC EDGAR round trips instead of running them
+  back-to-back. The subsequent inline-XBRL filing fetch+parse
+  (`extract_segments_for_filing`) genuinely depends on the filings result
+  (it needs the chosen filing's accession number/source URL) and stays
+  sequential after the pool. `SECConnector`'s rate limiter and file cache
+  are already safe under this concurrency (the limiter takes an internal
+  lock; the cache writes one file per URL digest), so the ~8 req/s SEC
+  fair-use ceiling is still honored.
 - **`services/`** — external integration clients: `sec_client.py` (defines
   `SECConnector`, the single access point for every SEC EDGAR surface this
   project uses — ticker/CIK resolution, submissions, XBRL company facts,
@@ -136,6 +149,80 @@ into one consistent surface, all sharing the same `FileCache`-backed caching,
   filer's structured holdings, also via `backend/data/ownership_xml.py`.
   `cik10` here is the **institutional filer's** CIK, not an issuer's — see
   "Insider transactions & institutional holdings" below.
+
+## Known SEC XBRL data quirk: `fy` metadata is not the fiscal year
+
+SEC's XBRL "companyfacts" API attaches an `fy` (and `fp`) field to every fact
+entry, and it is tempting to treat `fy` as "the fiscal year this period
+covers." **It is not.** `fy` reflects which annual filing's XBRL submission a
+datapoint was tagged under -- and a single reporting period routinely gets
+re-tagged with several different `fy` values because it shows up again as a
+prior-year comparative column in later 10-Ks. Confirmed on real GOOGL data:
+the period 2020-01-01/2020-12-31 appears with `fy=2022` (it's a comparative
+column in the FY2022 10-K). Matching on raw `fy` mislabels actual-FY2020
+revenue as "FY2022," silently shifting an entire historical series.
+
+The fix, in `backend/data/normalizer.py::_pick_fact_for_period` (and the
+year-scanning helpers `latest_available_fiscal_year` /
+`historical_analysis.available_fiscal_years`): derive the true fiscal year
+from the period's own `end` date (the calendar year `end` falls in), not from
+`fy`. This matches how companies with non-calendar year-ends label their own
+fiscal years (e.g. Apple's FY2024 ended September 2024). `fp` is still used
+to select FY vs Q1..Q4, with a duration sanity check (~365 vs ~90 days) so a
+stray entry can't be conflated with the wrong period type.
+
+One further wrinkle this uncovered: `dei:EntityCommonStockSharesOutstanding`
+("shares outstanding," a cover-page fact) is an *instant* concept whose `end`
+is the filing's cover-page date, not a fiscal period end -- e.g. an FY2025
+10-K filed in Feb 2026 reports shares outstanding "as of 2026-01-31" with
+`fp="FY"`. Applying the `end`-year rule to it would misidentify the company's
+latest fiscal year as one year later than reality (confirmed on real JPM
+data). `normalizer.YEAR_SCAN_EXCLUDED_CONCEPTS` excludes it from the
+fiscal-year-scanning helpers for this reason.
+
+### Sibling quirk: a company can switch XBRL tags mid-history
+
+`backend/data/concept_mapping.py::resolve_concept` maps each canonical
+concept (e.g. `revenue`) to an ordered list of candidate XBRL tags, because
+different filers use different tags for the same concept. The original
+implementation picked the FIRST candidate tag with ANY non-empty data
+anywhere in the company's history and used ONLY that tag's facts for every
+year -- which breaks when a single company itself switches tags across its
+own filing history (ASC 606 adoption, FASB guidance changes, or a filer just
+changing its disclosure tag).
+
+Confirmed on real GOOGL data (CIK 0001652044): Alphabet reported revenue
+under `RevenueFromContractWithCustomerExcludingAssessedTax` from ~2018
+through FY2024, then switched to plain `Revenues` for its FY2025 10-K
+(accession 0001652044-26-000018, `val=402836000000`). Locking onto the first
+tag made FY2025 revenue silently disappear (MISSING) everywhere in the app,
+even though the true figure was sitting in the company's own filed XBRL data
+under another valid candidate tag. The same multi-tag pattern (older
+`SalesRevenueNet` alongside the post-606 `RevenueFromContractWithCustomer...`
+tags) is also present in AAPL's and MSFT's revenue history, though neither
+currently has a *conflicting* value for an overlapping period.
+
+Fix: `resolve_concept` now checks every candidate tag that has any data and
+merges their fact-entry lists into one combined list (each entry keeps its
+own `_xbrl_tag` and `_tag_priority` for provenance), so `_pick_fact_for_period`
+can pick the right period regardless of which literal tag a company was
+using that year. `ConceptMatch.tag` still reports the single
+highest-priority tag with any data, for simple "which tag matched" callers,
+but per-value provenance (`FinancialFact.xbrl_tag`) is now taken from the
+individual fact entry (`_xbrl_tag`), not the company-wide `match.tag` --
+previously every value was mislabeled with whichever tag happened to match
+first, even when a later year's actual value came from a different tag.
+
+If the exact same reporting period is reported with a genuinely different
+value under two different candidate tags, `_pick_fact_for_period` returns
+`is_conflicting=True` and the caller records `DataStatus.CONFLICTING` instead
+of silently choosing one value -- no averaging, no guessing. When two tags
+report the *same* value for an overlapping period (duplicate coverage, not a
+real conflict), the higher-priority tag's entry is kept and no conflict is
+raised. No real conflicting pair has been observed in GOOGL/AAPL/MSFT
+revenue, operating_income, or net_income to date -- this path exists for
+correctness when one is eventually found, not because a case is currently
+known.
 
 ## Insider transactions & institutional holdings
 

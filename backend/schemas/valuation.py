@@ -61,6 +61,16 @@ class DcfInput(BaseModel):
     investments: float = Field(0.0, description="Non-operating investments added in EV->equity bridge")
     minority_interest: float = Field(0.0, description="Minority interest deducted in EV->equity bridge")
     diluted_shares_outstanding: float = Field(..., gt=0)
+    exit_multiple: Optional[float] = Field(
+        None,
+        description=(
+            "Optional explicit EV/EBITDA-style exit multiple applied to the terminal-year EBITDA "
+            "(terminal-year EBIT + terminal-year D&A) to compute an independent Exit Multiple terminal "
+            "value, alongside (never replacing) the Gordon Growth terminal value above. Omitted by "
+            "default -- existing callers that never set this field see identical behavior/output shape "
+            "as before (the new exit-multiple fields on DcfResult are simply left None)."
+        ),
+    )
 
     def validate_lengths(self) -> None:
         n = len(self.revenue_growth_rates)
@@ -95,6 +105,21 @@ class DcfResult(BaseModel):
     enterprise_value: float
     equity_value: float
     implied_price_per_share: float
+
+    # -- Optional, independently-computed Exit Multiple terminal value fields.
+    # Populated only when inputs.exit_multiple is supplied; left None otherwise
+    # so existing callers/tests that never set exit_multiple see byte-identical
+    # DcfResult behavior on every field above (backward compatible).
+    terminal_year_ebitda: Optional[float] = Field(
+        None, description="terminal_year EBIT + terminal_year D&A; basis for the exit-multiple TV"
+    )
+    exit_multiple_terminal_value_undiscounted: Optional[float] = None
+    exit_multiple_terminal_value_discounted: Optional[float] = None
+    exit_multiple_enterprise_value: Optional[float] = Field(
+        None, description="Enterprise value using the Exit Multiple terminal value instead of Gordon Growth"
+    )
+    exit_multiple_equity_value: Optional[float] = None
+    exit_multiple_implied_price_per_share: Optional[float] = None
 
 
 # --------------------------------------------------------------------------

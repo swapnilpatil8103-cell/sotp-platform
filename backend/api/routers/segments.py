@@ -8,6 +8,8 @@ the DB, and returns the result with full provenance.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
@@ -51,7 +53,6 @@ def get_company_segments(
     client = get_sec_client()
     try:
         cik10 = client.get_company_cik(ticker)
-        filings = client.get_latest_filings(cik10, form_types=("10-K",))
     except SECNotFoundError:
         raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
     except SECRateLimitError:
@@ -61,17 +62,53 @@ def get_company_segments(
     except SECError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
+    # `get_latest_filings` (submissions) and `get_company_facts` are two
+    # independent SEC EDGAR fetches -- neither depends on the other's
+    # output, only on `cik10` -- so run them concurrently on a thread pool
+    # rather than back-to-back. This is a genuine dependency-chain
+    # shortening, not a blanket parallelization: the next step,
+    # `extract_segments_for_filing` (which fetches+parses the filing's
+    # inline-XBRL document), genuinely depends on `filings` (it needs the
+    # chosen filing's accession number / source_url) and cannot start until
+    # that result is in hand, so it stays sequential after this pool.
+    # `SECConnector`'s rate limiter and file cache are already thread-safe
+    # (the limiter takes an internal lock; the cache writes distinct
+    # per-URL files), so two concurrent calls on the same connector are
+    # safe and still honor the shared ~8 req/s ceiling.
+    need_company_facts = fiscal_year is None
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        filings_future = pool.submit(client.get_latest_filings, cik10, form_types=("10-K",))
+        facts_future = pool.submit(client.get_company_facts, cik10) if need_company_facts else None
+
+        try:
+            filings = filings_future.result()
+        except SECNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Unknown ticker: {ticker}")
+        except SECRateLimitError:
+            raise HTTPException(status_code=503, detail="SEC EDGAR rate limit exceeded, please retry shortly")
+        except SECUnavailableError:
+            raise HTTPException(status_code=503, detail="SEC EDGAR is currently unavailable, please retry shortly")
+        except SECError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+
+        company_facts = None
+        if facts_future is not None:
+            try:
+                company_facts = facts_future.result()
+            except SECError:
+                # Same fallback behavior as before: a company-facts failure
+                # just means we fall back to the filing's period_of_report
+                # below, it isn't fatal to the request.
+                company_facts = None
+
     if not filings:
         raise HTTPException(status_code=404, detail=f"No 10-K filing found for {ticker}")
     filing = filings[0]
 
     target_year = fiscal_year
     if target_year is None:
-        try:
-            company_facts = client.get_company_facts(cik10)
+        if company_facts is not None:
             target_year = latest_available_fiscal_year(company_facts, "FY")
-        except SECError:
-            target_year = None
         if target_year is None:
             period = filing.get("period_of_report") or ""
             target_year = int(period[:4]) if period[:4].isdigit() else None

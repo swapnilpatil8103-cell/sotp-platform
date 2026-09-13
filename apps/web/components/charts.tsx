@@ -205,6 +205,173 @@ export function SensitivityHeatmap({ result }: { result: SensitivityResult }) {
   );
 }
 
+// --- historical revenue trend (bar, REPORTED-only) --------------------------
+
+export function RevenueTrendChart({
+  years,
+}: {
+  years: { fiscal_year: number; value?: number | null; data_status: string }[];
+}) {
+  const data = years.filter((y) => y.value != null);
+  if (data.length === 0) {
+    return (
+      <div className="flex h-64 items-center justify-center text-sm text-[#111827]/40">
+        No REPORTED revenue history available.
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <BarChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
+        <XAxis dataKey="fiscal_year" tick={{ fontSize: 11, fill: COLORS.text }} />
+        <YAxis tick={{ fontSize: 11, fill: COLORS.text }} tickFormatter={fmt} />
+        <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => fmt(v)} />
+        <Bar dataKey="value" name="Revenue (REPORTED)" fill={COLORS.secondary} radius={[6, 6, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+// --- operating margin trend (line) -----------------------------------------
+
+export function MarginTrendChart({
+  years,
+}: {
+  years: { fiscal_year: number; value?: number | null }[];
+}) {
+  const data = years.filter((y) => y.value != null);
+  if (data.length === 0) {
+    return (
+      <div className="flex h-56 items-center justify-center text-sm text-[#111827]/40">
+        No margin trend available.
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <LineChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
+        <XAxis dataKey="fiscal_year" tick={{ fontSize: 11, fill: COLORS.text }} />
+        <YAxis tick={{ fontSize: 11, fill: COLORS.text }} tickFormatter={(v: number) => `${v.toFixed(0)}%`} />
+        <Tooltip contentStyle={tooltipStyle} formatter={(v: number) => `${v.toFixed(1)}%`} />
+        <Line type="monotone" dataKey="value" name="Operating Margin" stroke={COLORS.primary} strokeWidth={2} dot={{ r: 3 }} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+// --- football field: SOTP / DCF / Comps triangulation ranges ---------------
+
+export type FootballFieldRange = {
+  name: string;
+  low: number | null;
+  high: number | null;
+  point: number | null; // point estimate / midpoint marker within the range
+  color: string;
+};
+
+export function FootballFieldChart({
+  ranges,
+  marketPrice,
+  triangulatedPrice,
+}: {
+  ranges: FootballFieldRange[];
+  marketPrice?: number | null;
+  triangulatedPrice?: number | null;
+}) {
+  const usable = ranges.filter((r) => r.low != null || r.high != null || r.point != null);
+  if (usable.length === 0) {
+    return (
+      <div className="flex h-40 items-center justify-center text-sm text-[#111827]/40">
+        Enter at least one methodology's implied price/range to render the football field.
+      </div>
+    );
+  }
+
+  const allValues: number[] = [];
+  usable.forEach((r) => {
+    if (r.low != null) allValues.push(r.low);
+    if (r.high != null) allValues.push(r.high);
+    if (r.point != null) allValues.push(r.point);
+  });
+  if (marketPrice != null) allValues.push(marketPrice);
+  if (triangulatedPrice != null) allValues.push(triangulatedPrice);
+
+  const dataMin = Math.min(...allValues);
+  const dataMax = Math.max(...allValues);
+  const pad = (dataMax - dataMin) * 0.12 || Math.max(dataMax * 0.1, 1);
+  const min = Math.max(0, dataMin - pad);
+  const max = dataMax + pad;
+  const span = max - min || 1;
+  const pct = (v: number) => `${((v - min) / span) * 100}%`;
+
+  return (
+    <div className="space-y-4">
+      <div className="relative">
+        {/* market price vertical reference line, spans all rows */}
+        {marketPrice != null && (
+          <div
+            className="pointer-events-none absolute top-0 z-10 h-full border-l-2 border-dashed border-[#111827]/40"
+            style={{ left: pct(marketPrice) }}
+          />
+        )}
+        {triangulatedPrice != null && (
+          <div
+            className="pointer-events-none absolute top-0 z-10 h-full border-l-2 border-[#0B1F3A]"
+            style={{ left: pct(triangulatedPrice) }}
+          />
+        )}
+        <div className="space-y-3">
+          {usable.map((r) => {
+            const low = r.low ?? r.point ?? r.high!;
+            const high = r.high ?? r.point ?? r.low!;
+            return (
+              <div key={r.name} className="flex items-center gap-3">
+                <div className="w-20 shrink-0 text-xs font-medium text-[#111827]/70">{r.name}</div>
+                <div className="relative h-6 flex-1 rounded-[6px] bg-[#F8FAFC]">
+                  <div
+                    className="absolute top-1/2 h-3 -translate-y-1/2 rounded-full opacity-70"
+                    style={{ left: pct(low), width: `calc(${pct(high)} - ${pct(low)})`, backgroundColor: r.color }}
+                  />
+                  {r.point != null && (
+                    <div
+                      className="absolute top-1/2 h-4 w-[2px] -translate-y-1/2"
+                      style={{ left: pct(r.point), backgroundColor: r.color }}
+                      title={`${r.name} point estimate: $${r.point.toFixed(2)}`}
+                    />
+                  )}
+                </div>
+                <div className="w-28 shrink-0 text-right text-xs tabular-nums text-[#111827]/60">
+                  {r.low != null && r.high != null
+                    ? `$${r.low.toFixed(0)} – $${r.high.toFixed(0)}`
+                    : r.point != null
+                    ? `$${r.point.toFixed(2)}`
+                    : "—"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-4 text-[11px] text-[#111827]/60">
+        {marketPrice != null && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-0 w-4 border-t-2 border-dashed border-[#111827]/40" />
+            Current market price (${marketPrice.toFixed(2)})
+          </span>
+        )}
+        {triangulatedPrice != null && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-0 w-4 border-t-2 border-[#0B1F3A]" />
+            Triangulated (weighted) fair value (${triangulatedPrice.toFixed(2)})
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function mix(hexA: string, hexB: string, t: number): string {
   const a = hexToRgb(hexA);
   const b = hexToRgb(hexB);

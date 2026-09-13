@@ -1,9 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { computeSotp, ApiError } from "@/lib/api";
-import type { SotpInput, SotpResult, SotpSegmentInput } from "@/lib/types";
-import { Card, ErrorState, MetricCard, SectionHeading } from "@/components/ui";
+import { autoValueSegments, computeSotp, ApiError } from "@/lib/api";
+import type {
+  AutoValueSegmentsRequest,
+  SegmentValuationSuggestion,
+  SotpInput,
+  SotpResult,
+  SotpSegmentInput,
+} from "@/lib/types";
+import { AIBadge, Card, ErrorState, MetricCard, SectionHeading } from "@/components/ui";
 import { SotpWaterfallChart } from "@/components/charts";
 
 const DEFAULT_SEGMENTS: SotpSegmentInput[] = [
@@ -33,8 +39,63 @@ export default function SotpPage({ params }: { params: { ticker: string } }) {
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
 
+  // Auto-value (SUGGESTED, requires review) state: uniform EV/Revenue
+  // multiple applied across all segments via POST /valuation/{ticker}/segments/auto-value.
+  const [autoMultiple, setAutoMultiple] = useState(3.0);
+  const [autoLoading, setAutoLoading] = useState(false);
+  const [autoError, setAutoError] = useState<unknown>(null);
+  const [suggestedIdx, setSuggestedIdx] = useState<Set<number>>(new Set());
+
   function updateSegment(i: number, patch: Partial<SotpSegmentInput>) {
     setSegments((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+    // Editing a field after a suggestion was applied means it's now a
+    // human-reviewed/edited value, not the raw AI suggestion anymore.
+    setSuggestedIdx((prev) => {
+      const next = new Set(prev);
+      next.delete(i);
+      return next;
+    });
+  }
+
+  async function runAutoValue() {
+    setAutoLoading(true);
+    setAutoError(null);
+    try {
+      // Uses each segment's current "enterprise_value" field as a stand-in
+      // REPORTED revenue figure for this quick uniform-multiple suggestion
+      // flow -- in a full integration this would come from
+      // GET /companies/{ticker}/segments' REPORTED revenue facts per
+      // segment. The multiple itself is always an explicit human input
+      // (autoMultiple), never invented.
+      const payload: AutoValueSegmentsRequest = {
+        segments: segments.map((s) => ({
+          segment: {
+            name: s.name,
+            revenue: s.enterprise_value > 0 ? s.enterprise_value : null,
+            revenue_status: s.enterprise_value > 0 ? "REPORTED" : "MISSING",
+          },
+          methodology: "multiple",
+          multiple_assumption: { metric: "ev_to_revenue", multiple_value: autoMultiple },
+        })),
+      };
+      const resp = await autoValueSegments(ticker, payload);
+      const applied = new Set<number>();
+      setSegments((prev) =>
+        prev.map((s, i) => {
+          const suggestion: SegmentValuationSuggestion | undefined = resp.suggestions[i];
+          if (suggestion && suggestion.status === "SUGGESTED" && suggestion.suggested_enterprise_value != null) {
+            applied.add(i);
+            return { ...s, enterprise_value: suggestion.suggested_enterprise_value };
+          }
+          return s;
+        })
+      );
+      setSuggestedIdx(applied);
+    } catch (err) {
+      setAutoError(err);
+    } finally {
+      setAutoLoading(false);
+    }
   }
 
   async function submit() {
@@ -72,7 +133,35 @@ export default function SotpPage({ params }: { params: { ticker: string } }) {
         description={`Assemble the sum-of-the-parts bridge for ${ticker} and compute it via POST /valuation/sotp. Segment EVs should come from per-segment DCF/comps runs.`}
       />
 
-      <Card title="Segments">
+      <Card
+        title="Segments"
+        action={
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-[#111827]/60">EV/Revenue multiple</label>
+            <input
+              type="number"
+              step="0.1"
+              className="w-20 rounded-[8px] border border-[#E5E7EB] px-2 py-1 text-xs tabular-nums"
+              value={autoMultiple}
+              onChange={(e) => setAutoMultiple(Number(e.target.value))}
+            />
+            <button
+              onClick={runAutoValue}
+              disabled={autoLoading}
+              className="rounded-[8px] border border-[#2563EB]/40 bg-[#0B1F3A] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#0B1F3A]/90 disabled:opacity-50"
+            >
+              {autoLoading ? "Suggesting…" : "Auto-suggest segment EVs"}
+            </button>
+          </div>
+        }
+      >
+        <p className="mb-3 text-xs text-[#111827]/50">
+          Auto-suggest calls <code>POST /valuation/{ticker}/segments/auto-value</code> to pre-fill each
+          segment&apos;s enterprise value using the multiple above applied to its current EV field (as a
+          stand-in revenue figure). Suggested values are model-generated — review before use — and every
+          field below remains fully editable.
+        </p>
+        {Boolean(autoError) && <ErrorState error={autoError} context={`POST /valuation/${ticker}/segments/auto-value`} />}
         <div className="space-y-3">
           {segments.map((s, i) => (
             <div key={i} className="grid grid-cols-1 gap-2 sm:grid-cols-4 items-center">
@@ -82,13 +171,20 @@ export default function SotpPage({ params }: { params: { ticker: string } }) {
                 onChange={(e) => updateSegment(i, { name: e.target.value })}
                 placeholder="Segment name"
               />
-              <input
-                type="number"
-                className="rounded-[8px] border border-[#E5E7EB] px-3 py-2 text-sm tabular-nums"
-                value={s.enterprise_value}
-                onChange={(e) => updateSegment(i, { enterprise_value: Number(e.target.value) })}
-                placeholder="Enterprise value"
-              />
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  className="w-full rounded-[8px] border border-[#E5E7EB] px-3 py-2 text-sm tabular-nums"
+                  value={s.enterprise_value}
+                  onChange={(e) => updateSegment(i, { enterprise_value: Number(e.target.value) })}
+                  placeholder="Enterprise value"
+                />
+                {suggestedIdx.has(i) && (
+                  <span title="AI/model-suggested — review before use">
+                    <AIBadge label="Suggested" />
+                  </span>
+                )}
+              </div>
               <input
                 type="number"
                 step="0.01"

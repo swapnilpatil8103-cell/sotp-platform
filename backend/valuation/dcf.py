@@ -59,6 +59,17 @@ def compute_terminal_value(final_year_fcff: float, wacc: float, terminal_growth_
     return fcff_next / (wacc - terminal_growth_rate)
 
 
+def compute_exit_multiple_terminal_value(terminal_year_ebitda: float, exit_multiple: float) -> float:
+    """Exit Multiple terminal value: TV = terminal_year_EBITDA * exit_multiple.
+
+    Independent of, and never a substitute for, the Gordon Growth terminal
+    value above -- both are computed and returned side by side when
+    ``exit_multiple`` is supplied on ``DcfInput``. ``exit_multiple`` is always
+    an explicit caller-supplied input; nothing here invents or defaults it.
+    """
+    return terminal_year_ebitda * exit_multiple
+
+
 def run_dcf(inputs: DcfInput) -> DcfResult:
     inputs.validate_lengths()
 
@@ -89,7 +100,8 @@ def run_dcf(inputs: DcfInput) -> DcfResult:
     final_discount_factor = projections[-1].discount_factor
     terminal_value_discounted = terminal_value_undiscounted * final_discount_factor
 
-    enterprise_value = sum(p.discounted_fcff for p in projections) + terminal_value_discounted
+    sum_pv_fcff = sum(p.discounted_fcff for p in projections)
+    enterprise_value = sum_pv_fcff + terminal_value_discounted
 
     equity_value = (
         enterprise_value
@@ -100,6 +112,30 @@ def run_dcf(inputs: DcfInput) -> DcfResult:
     )
     implied_price_per_share = equity_value / inputs.diluted_shares_outstanding
 
+    # -- Optional, independent Exit Multiple terminal value (additive-only:
+    # never touches Gordon Growth fields above). Only computed when the
+    # caller explicitly supplies exit_multiple.
+    terminal_year_ebitda = None
+    exit_tv_undiscounted = None
+    exit_tv_discounted = None
+    exit_ev = None
+    exit_equity = None
+    exit_price = None
+    if inputs.exit_multiple is not None:
+        final_year = projections[-1]
+        terminal_year_ebitda = final_year.ebit + final_year.da
+        exit_tv_undiscounted = compute_exit_multiple_terminal_value(terminal_year_ebitda, inputs.exit_multiple)
+        exit_tv_discounted = exit_tv_undiscounted * final_year.discount_factor
+        exit_ev = sum_pv_fcff + exit_tv_discounted
+        exit_equity = (
+            exit_ev
+            - inputs.net_debt
+            + inputs.cash_and_equivalents
+            + inputs.investments
+            - inputs.minority_interest
+        )
+        exit_price = exit_equity / inputs.diluted_shares_outstanding
+
     return DcfResult(
         inputs=inputs,
         projections=projections,
@@ -108,4 +144,10 @@ def run_dcf(inputs: DcfInput) -> DcfResult:
         enterprise_value=enterprise_value,
         equity_value=equity_value,
         implied_price_per_share=implied_price_per_share,
+        terminal_year_ebitda=terminal_year_ebitda,
+        exit_multiple_terminal_value_undiscounted=exit_tv_undiscounted,
+        exit_multiple_terminal_value_discounted=exit_tv_discounted,
+        exit_multiple_enterprise_value=exit_ev,
+        exit_multiple_equity_value=exit_equity,
+        exit_multiple_implied_price_per_share=exit_price,
     )

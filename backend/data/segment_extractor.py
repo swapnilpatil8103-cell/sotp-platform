@@ -71,6 +71,35 @@ SEGMENT_AXIS_LOCAL_NAMES = {
     "OperatingSegmentsAxis",
 }
 
+# `ConsolidationItemsAxis` (member `OperatingSegmentsMember`) is boilerplate
+# that many filers (e.g. Alphabet's segment operating-income table, Apple's
+# geographic revenue table) attach alongside the business-segment axis purely
+# to say "this is the reportable-segment amount, not corporate/eliminations".
+# It is not a further breakdown of the segment (unlike ProductOrServiceAxis,
+# a geography axis used as an *additional* qualifier, etc.), so a context
+# carrying only the segment axis plus this specific axis/member still counts
+# as the segment's own total, not a sub-component.
+NON_BREAKDOWN_AXIS_MEMBERS = {
+    "ConsolidationItemsAxis": {"OperatingSegmentsMember"},
+}
+
+
+def _is_pure_segment_context(ctx: "XbrlContext") -> bool:
+    """True if every dimension on this context is either the business-segment
+    axis itself or a recognized non-breakdown qualifier (see
+    ``NON_BREAKDOWN_AXIS_MEMBERS``) -- i.e. the fact represents the segment's
+    own total, not a finer product/geography/etc. sub-line nested within it.
+    """
+    for axis, member in ctx.dimensions:
+        axis_local = _local(axis)
+        if axis_local in SEGMENT_AXIS_LOCAL_NAMES:
+            continue
+        allowed_members = NON_BREAKDOWN_AXIS_MEMBERS.get(axis_local)
+        if allowed_members is not None and _local(member) in allowed_members:
+            continue
+        return False
+    return True
+
 
 def _local(qname: str) -> str:
     return qname.split(":")[-1]
@@ -162,13 +191,21 @@ def extract_segments_from_instance(
             cid for cid in ctx_ids if cid in contexts and _context_matches_period(contexts[cid], fiscal_year, fiscal_period)
         ]
 
+        # Only contexts dimensioned *purely* by the business-segment axis (no
+        # additional axes layered on top, e.g. ProductOrServiceAxis or
+        # geography) represent the segment's own total. A context with extra
+        # dimensions is a finer sub-component nested within the segment (a
+        # product line, a region, etc.) and must never be mistaken for the
+        # segment-level total -- see module docstring / bug history.
+        pure_ctx_ids = [cid for cid in matching_ctx_ids if _is_pure_segment_context(contexts[cid])]
+
         ext = ExtractedSegment(name=segment_name)
         for concept in SEGMENT_CONCEPTS:
             candidates = SEGMENT_CONCEPT_TAG_CANDIDATES[concept]
             picked_fact: Optional[XbrlFact] = None
             picked_tag: Optional[str] = None
             for tag in candidates:
-                for cid in matching_ctx_ids:
+                for cid in pure_ctx_ids:
                     hits = facts_index.get((tag, cid))
                     if hits:
                         picked_fact = hits[0]
@@ -176,6 +213,11 @@ def extract_segments_from_instance(
                         break
                 if picked_fact is not None:
                     break
+            # Deliberately no fallback to multi-dimensional (e.g.
+            # product-level) facts here: if a filer never discloses a pure
+            # segment-level total for this concept, summing or guessing from
+            # sub-line facts would risk double-counting or omitting lines we
+            # can't verify are exhaustive. Report MISSING instead.
 
             if picked_fact is None:
                 ext.facts.append(

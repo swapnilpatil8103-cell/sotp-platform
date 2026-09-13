@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
 from backend.api.deps import get_sec_client
+from backend.data.historical_analysis import build_historical_trends
 from backend.data.normalizer import latest_available_fiscal_year, normalize_company_facts
 from backend.data.peer_discovery import discover_peer_candidates
 from backend.data.persistence import (
@@ -27,6 +28,7 @@ from backend.schemas.company import (
     CompanyFactsRead,
     CompanyRead,
     FinancialFactRead,
+    HistoricalTrendsRead,
     InsiderTransactionRead,
     InstitutionalHoldingRead,
 )
@@ -182,6 +184,71 @@ def get_company_facts(
         fiscal_year=target_year,
         fiscal_period=fiscal_period,
         facts=[_to_read(f) for f in persisted],
+    )
+
+
+@router.get("/{ticker}/historical-trends", response_model=HistoricalTrendsRead)
+def get_historical_trends(
+    ticker: str,
+    fiscal_period: str = "FY",
+    num_years: int = 6,
+    num_forecast_years: int = 5,
+    session: Session = Depends(get_session),
+    client=Depends(get_sec_client),
+) -> HistoricalTrendsRead:
+    """Multi-year REPORTED historical series + deterministic CAGR / operating
+    margin trend / SUGGESTED forward-growth projection for `ticker`.
+
+    Pure deterministic computation over already-fetched SEC XBRL company
+    facts (`SECConnector.get_company_facts` returns full multi-year history
+    in one call) -- no AI, no interpolation, no fabricated data points. Every
+    historical figure keeps its real REPORTED/MISSING `data_status`; the
+    forward projection is unambiguously labeled `SUGGESTED` (see
+    `backend/data/historical_analysis.py`) and is never written into any
+    DCF/valuation input automatically.
+    """
+    try:
+        cik10 = client.get_company_cik(ticker)
+        company_facts = client.get_company_facts(cik10)
+    except SECNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Unknown ticker or no XBRL facts available: {ticker}")
+    except SECRateLimitError:
+        raise HTTPException(status_code=503, detail="SEC EDGAR rate limit exceeded, please retry shortly")
+    except SECUnavailableError:
+        raise HTTPException(status_code=503, detail="SEC EDGAR is currently unavailable, please retry shortly")
+    except SECError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    company = get_or_create_company(session, ticker=ticker, cik10=cik10)
+
+    result = build_historical_trends(
+        company_id=company.id,
+        ticker=ticker,
+        company_facts=company_facts,
+        fiscal_period=fiscal_period,
+        cik10=cik10,
+        num_years=num_years,
+        num_forecast_years=num_forecast_years,
+    )
+
+    if not result["fiscal_years_covered"]:
+        raise HTTPException(status_code=404, detail=f"No {fiscal_period} historical XBRL facts available for {ticker}")
+
+    # Persist the extracted multi-year facts so they're available like any
+    # other FinancialFact row (same natural-key upsert as /facts).
+    upsert_financial_facts(session, company.id, result.pop("facts"))
+
+    return HistoricalTrendsRead(
+        ticker=ticker.upper(),
+        cik=cik10,
+        company_id=company.id,
+        fiscal_period=result["fiscal_period"],
+        fiscal_years_covered=result["fiscal_years_covered"],
+        series=result["series"],
+        revenue_cagr=result["revenue_cagr"],
+        net_income_cagr=result["net_income_cagr"],
+        operating_margin_trend=result["operating_margin_trend"],
+        suggested_forward_revenue=result["suggested_forward_revenue"],
     )
 
 

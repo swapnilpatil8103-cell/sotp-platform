@@ -9,6 +9,10 @@
  */
 
 import type {
+  AutoValueSegmentsRequest,
+  AutoValueSegmentsResponse,
+  BetaAnalysisInput,
+  BetaAnalysisResult,
   CompanyFactsRead,
   CompanyIdRead,
   CompanyRead,
@@ -19,6 +23,7 @@ import type {
   DcfResult,
   DiffResponse,
   FilingsResponse,
+  HistoricalTrendsRead,
   MarketDataRead,
   MemoResponse,
   RiskDashboardResult,
@@ -114,6 +119,18 @@ export const getCompanySegments = (ticker: string, fiscalYear?: number) =>
     `/companies/${encodeURIComponent(ticker)}/segments${qs({ fiscal_year: fiscalYear })}`
   );
 
+export const getHistoricalTrends = (
+  ticker: string,
+  opts?: { fiscalPeriod?: string; numYears?: number; numForecastYears?: number }
+) =>
+  request<HistoricalTrendsRead>(
+    `/companies/${encodeURIComponent(ticker)}/historical-trends${qs({
+      fiscal_period: opts?.fiscalPeriod,
+      num_years: opts?.numYears,
+      num_forecast_years: opts?.numForecastYears,
+    })}`
+  );
+
 export const getMarketData = (ticker: string) =>
   request<MarketDataRead>(`/companies/${encodeURIComponent(ticker)}/market-data`);
 
@@ -148,6 +165,18 @@ export const computeSensitivity = (
   payload: SensitivityInput
 ) =>
   request<SensitivityResult>(`/valuation/sensitivity/${kind}`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const autoValueSegments = (ticker: string, payload: AutoValueSegmentsRequest) =>
+  request<AutoValueSegmentsResponse>(
+    `/valuation/${encodeURIComponent(ticker)}/segments/auto-value`,
+    { method: "POST", body: JSON.stringify(payload) }
+  );
+
+export const computePeerInformedBeta = (payload: BetaAnalysisInput) =>
+  request<BetaAnalysisResult>(`/valuation/wacc/peer-beta`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

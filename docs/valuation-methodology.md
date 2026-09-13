@@ -75,6 +75,26 @@ where `E` and `D` are the market values of equity and debt supplied by the
 caller. All inputs (risk-free rate, beta, ERP, cost of debt, tax rate,
 capital weights) are required — nothing is hardcoded.
 
+**Peer-informed beta (optional, `backend/valuation/beta_analysis.py`).**
+`compute_wacc`'s `beta` input may optionally be pre-filled (never
+auto-substituted) from a peer set via the Hamada unlever/relever equations,
+pure deterministic math, no AI:
+
+```
+beta_u_peer         = beta_l_peer / (1 + (1 - T_peer) * (D/E)_peer)
+beta_u_aggregate     = median(beta_u_peer for all usable peers)   # or average
+beta_l_target        = beta_u_aggregate * (1 + (1 - T_target) * (D/E)_target)
+```
+
+Every peer's `debt_to_equity`/`tax_rate` must be real data (caller-supplied,
+or sourced upstream from `market_data_client.py`/`peer_discovery.py`); a peer
+missing either is skipped and listed in `skipped_peers` with a reason —
+never defaulted to 0 or fabricated. `run_beta_analysis` raises if no peer has
+usable data. Exposed via `POST /valuation/wacc/peer-beta`, returning a
+`relevered_beta` explicitly framed as SUGGESTED — a human must review it
+(the DCF page's "Use peer-informed beta" toggle pre-fills the Beta field but
+never submits it automatically).
+
 ### 2. DCF (`backend/valuation/dcf.py`)
 
 For each forecast year `i` (from explicit, caller-supplied per-year
@@ -104,6 +124,25 @@ discounted to present value at `WACC`, summed to enterprise value:
 ```
 EV = sum(FCFF_i / (1+WACC)^i) + TV / (1+WACC)^n
 ```
+
+**Dual terminal value (optional Exit Multiple method).** `DcfInput.exit_multiple`
+is an optional, explicit caller-supplied input (never defaulted/inferred). When
+supplied, an independent Exit Multiple terminal value is computed *alongside*
+(never replacing) the Gordon Growth result above:
+
+```
+terminal_year_ebitda = terminal_year_EBIT + terminal_year_D&A
+TV_exit = terminal_year_ebitda * exit_multiple
+EV_exit = sum(FCFF_i / (1+WACC)^i) + TV_exit / (1+WACC)^n
+```
+
+`EV_exit`, its own equity value, and implied price/share are returned on
+additional optional `DcfResult` fields (`terminal_year_ebitda`,
+`exit_multiple_terminal_value_undiscounted/_discounted`,
+`exit_multiple_enterprise_value`, `exit_multiple_equity_value`,
+`exit_multiple_implied_price_per_share`) — all `None` when `exit_multiple`
+is omitted, so existing callers see byte-identical Gordon Growth behavior.
+See `backend/valuation/dcf.py::compute_exit_multiple_terminal_value`.
 
 EV -> equity value bridge:
 
@@ -272,6 +311,32 @@ already-finalized result in prose; it never recomputes the number, and any
 explanation containing a numeric token that can't be traced back to the
 structured result (via `backend.ai.validation.validate_ai_numbers`) is
 discarded.
+
+## Automated per-segment valuation (`backend/valuation/segment_valuation.py`)
+
+Given a segment's own REPORTED financial facts (from `segment_extractor.py`)
+and an explicit, human-supplied methodology + assumption set, produces a
+SUGGESTED segment enterprise value by composing the *existing* engine
+functions at segment level — no new valuation math:
+
+- `methodology="multiple"`: `segment_ev = segment_metric * multiple`, the
+  same EV-based-multiple formula `run_comps` applies (`ev_to_revenue` or
+  `ev_to_ebit`), using the segment's own REPORTED revenue/EBIT and an
+  explicit caller-supplied multiple.
+- `methodology="dcf"`: runs the unmodified `run_dcf` with the segment's own
+  REPORTED revenue as `base_revenue` and an explicit, human-supplied
+  segment-level assumption set (growth/margins/WACC/etc); the EV→equity
+  bridge fields are neutralized at segment level since SOTP applies that
+  bridge once, company-wide, upstream.
+
+If a segment lacks the REPORTED data its chosen method needs, `value_segment`
+returns `status="ERROR"` with a clear reason — it never fabricates a value or
+silently swaps to a different method. Every successful result is tagged
+`data_status="SUGGESTED"`/`requires_review=True`. Exposed via
+`POST /valuation/{ticker}/segments/auto-value`, which takes the real segment
+list plus per-segment methodology/assumption choices and returns suggestions
+meant only to pre-fill (never bypass) the SOTP segment EV fields — nothing
+here writes an `AssumptionDecision` or `ValuationRun`.
 
 ## Value-unlock engine (`backend/valuation/value_unlock.py`)
 

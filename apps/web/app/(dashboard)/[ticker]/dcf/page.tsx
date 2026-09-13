@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { computeDcf } from "@/lib/api";
-import type { DcfInput, DcfResult } from "@/lib/types";
-import { Card, ErrorState, MetricCard, SectionHeading, Table } from "@/components/ui";
+import { computeDcf, computePeerInformedBeta } from "@/lib/api";
+import type { BetaAnalysisResult, DcfInput, DcfResult, PeerBetaInputRow } from "@/lib/types";
+import { AIBadge, Card, ErrorState, MetricCard, SectionHeading, Table } from "@/components/ui";
 import { DcfProjectionChart } from "@/components/charts";
 
 const N_YEARS = 5;
@@ -26,10 +26,48 @@ export default function DcfPage({ params }: { params: { ticker: string } }) {
   const [netDebt, setNetDebt] = useState(5_000_000_000);
   const [cash, setCash] = useState(20_000_000_000);
   const [shares, setShares] = useState(1_000_000_000);
+  const [exitMultiple, setExitMultiple] = useState<number | "">("");
 
   const [result, setResult] = useState<DcfResult | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
+
+  // Peer-informed beta (SUGGESTED, pre-fill only) -- POST /valuation/wacc/peer-beta.
+  const [beta, setBeta] = useState(1.1);
+  const [targetDE, setTargetDE] = useState(0.4);
+  const [targetTax, setTargetTax] = useState(0.21);
+  const [peerBetaResult, setPeerBetaResult] = useState<BetaAnalysisResult | null>(null);
+  const [peerBetaLoading, setPeerBetaLoading] = useState(false);
+  const [peerBetaError, setPeerBetaError] = useState<unknown>(null);
+  const [betaIsSuggested, setBetaIsSuggested] = useState(false);
+
+  // Placeholder peer set for the demo toggle -- in a full integration this
+  // would come from GET /companies/{ticker}/peer-candidates real financials.
+  const DEMO_PEERS: PeerBetaInputRow[] = [
+    { name: "Peer A", levered_beta: 1.3, debt_to_equity: 0.4, tax_rate: 0.25 },
+    { name: "Peer B", levered_beta: 1.1, debt_to_equity: 0.3, tax_rate: 0.23 },
+    { name: "Peer C", levered_beta: 1.4, debt_to_equity: 0.5, tax_rate: 0.24 },
+  ];
+
+  async function usePeerInformedBeta() {
+    setPeerBetaLoading(true);
+    setPeerBetaError(null);
+    try {
+      const r = await computePeerInformedBeta({
+        peers: DEMO_PEERS,
+        aggregation: "median",
+        target_debt_to_equity: targetDE,
+        target_tax_rate: targetTax,
+      });
+      setPeerBetaResult(r);
+      setBeta(r.relevered_beta);
+      setBetaIsSuggested(true);
+    } catch (err) {
+      setPeerBetaError(err);
+    } finally {
+      setPeerBetaLoading(false);
+    }
+  }
 
   async function submit() {
     setLoading(true);
@@ -50,6 +88,7 @@ export default function DcfPage({ params }: { params: { ticker: string } }) {
       investments: 0,
       minority_interest: 0,
       diluted_shares_outstanding: shares,
+      exit_multiple: exitMultiple === "" ? null : Number(exitMultiple),
     };
     try {
       setResult(await computeDcf(payload));
@@ -81,7 +120,72 @@ export default function DcfPage({ params }: { params: { ticker: string } }) {
           <Num label="Net debt" value={netDebt} onChange={setNetDebt} />
           <Num label="Cash & equivalents" value={cash} onChange={setCash} />
           <Num label="Diluted shares outstanding" value={shares} onChange={setShares} />
+          <div>
+            <label className="mb-1 block text-xs font-medium text-[#111827]/60">
+              Exit multiple (EV/EBITDA, optional)
+            </label>
+            <input
+              type="number"
+              step="0.5"
+              value={exitMultiple}
+              onChange={(e) => setExitMultiple(e.target.value === "" ? "" : Number(e.target.value))}
+              className="w-full rounded-[8px] border border-[#E5E7EB] px-3 py-2 text-sm tabular-nums"
+              placeholder="e.g. 10"
+            />
+            <p className="mt-1 text-[10px] text-[#111827]/40">
+              When set, an independent Exit Multiple terminal value is computed alongside Gordon Growth.
+            </p>
+          </div>
         </div>
+      </Card>
+
+      <Card
+        title="WACC — Beta"
+        subtitle="Levered beta feeding CAPM cost of equity. Optionally pre-fill it with a peer-informed unlevered/relevered beta — reviewable, never forced."
+      >
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+          <div>
+            <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#111827]/60">
+              Beta {betaIsSuggested && <AIBadge label="Suggested" />}
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              value={beta}
+              onChange={(e) => {
+                setBeta(Number(e.target.value));
+                setBetaIsSuggested(false);
+              }}
+              className="w-full rounded-[8px] border border-[#E5E7EB] px-3 py-2 text-sm tabular-nums"
+            />
+          </div>
+          <Num label="Target D/E" value={targetDE} onChange={setTargetDE} step="0.01" />
+          <Num label="Target tax rate" value={targetTax} onChange={setTargetTax} step="0.01" />
+          <div className="flex items-end">
+            <button
+              onClick={usePeerInformedBeta}
+              disabled={peerBetaLoading}
+              className="w-full rounded-[8px] border border-[#2563EB]/40 bg-[#0B1F3A] px-3 py-2 text-xs font-medium text-white hover:bg-[#0B1F3A]/90 disabled:opacity-50"
+            >
+              {peerBetaLoading ? "Computing…" : "Use peer-informed beta"}
+            </button>
+          </div>
+        </div>
+        {Boolean(peerBetaError) && <div className="mt-3"><ErrorState error={peerBetaError} context="POST /valuation/wacc/peer-beta" /></div>}
+        {peerBetaResult && (
+          <p className="mt-3 text-xs text-[#111827]/60">
+            Unlevered ({peerBetaResult.aggregation}) beta across {peerBetaResult.used_peers.length} peer(s):{" "}
+            {peerBetaResult.unlevered_beta_aggregate.toFixed(3)}. Relevered at target D/E {peerBetaResult.target_debt_to_equity}
+            , tax {peerBetaResult.target_tax_rate}: <strong>{peerBetaResult.relevered_beta.toFixed(3)}</strong> — pre-filled
+            above, still editable.
+            {peerBetaResult.skipped_peers.length > 0 && (
+              <>
+                {" "}
+                Skipped: {peerBetaResult.skipped_peers.map((p) => `${p.name} (${p.reason})`).join("; ")}
+              </>
+            )}
+          </p>
+        )}
       </Card>
 
       <button
@@ -102,6 +206,32 @@ export default function DcfPage({ params }: { params: { ticker: string } }) {
             <MetricCard label="Implied Price/Share" value={`$${result.implied_price_per_share.toFixed(2)}`} />
             <MetricCard label="Terminal Value (PV)" value={fmt(result.terminal_value_discounted)} />
           </div>
+
+          {result.exit_multiple_enterprise_value != null && (
+            <Card
+              title="Exit Multiple Terminal Value (alongside Gordon Growth)"
+              subtitle={`Terminal-year EBITDA ${fmt(result.terminal_year_ebitda ?? 0)} × exit multiple ${
+                result.inputs.exit_multiple ?? ""
+              }`}
+            >
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <MetricCard label="Exit-Multiple EV" value={fmt(result.exit_multiple_enterprise_value)} />
+                <MetricCard label="Exit-Multiple Equity Value" value={fmt(result.exit_multiple_equity_value ?? 0)} />
+                <MetricCard
+                  label="Exit-Multiple Price/Share"
+                  value={`$${(result.exit_multiple_implied_price_per_share ?? 0).toFixed(2)}`}
+                />
+                <MetricCard
+                  label="Exit-Multiple TV (PV)"
+                  value={fmt(result.exit_multiple_terminal_value_discounted ?? 0)}
+                />
+              </div>
+              <p className="mt-3 text-xs text-[#111827]/50">
+                Independent of the Gordon Growth result above — both terminal value methods are computed from
+                the same explicit forecast, shown side by side for comparison.
+              </p>
+            </Card>
+          )}
 
           <Card title="FCFF Projection">
             <DcfProjectionChart projections={result.projections} />

@@ -170,14 +170,50 @@ def resolve_concept(concept: str, company_facts: dict[str, Any]) -> ConceptMatch
     https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json, i.e. it has a
     top-level ``facts`` key mapping taxonomy -> tag -> {"units": {unit: [...]}}.
 
-    Tries each candidate tag (in order) across each taxonomy (in order) and
-    returns the first one present in the company's facts. Does not filter by
-    fiscal period here — that's the caller's job once a tag is chosen.
+    BUG HISTORY: this used to try each candidate tag in priority order and
+    return the FIRST one with ANY non-empty fact list anywhere in the
+    company's history, then commit to that single tag's facts for the entire
+    company. That's wrong when a company itself switches which XBRL tag it
+    uses for a concept across its own filing history (common on ASC 606
+    adoption, SEC/FASB guidance changes, or a filer just changing its
+    disclosure tag) -- confirmed with real GOOGL data: Alphabet reported
+    revenue under `RevenueFromContractWithCustomerExcludingAssessedTax` from
+    ~2018 through FY2024, then switched to plain `Revenues` for its FY2025
+    10-K. Locking onto the first tag made FY2025 revenue silently disappear
+    even though it was sitting right there under another valid candidate tag.
+
+    Fix: check EVERY candidate tag (in priority order, each taxonomy in
+    order) that has ANY data, and MERGE their fact-entry lists into one
+    combined list, so a caller filtering by fiscal period (see
+    `normalizer._pick_fact_for_period`) sees the union of periods across a
+    company's tag transitions, not just whichever tag happened to match
+    first. Each merged entry carries its own `_xbrl_tag`/`_tag_priority` keys
+    so provenance (which literal tag a given VALUE came from) survives the
+    merge -- callers must read a fact entry's own `_xbrl_tag`, not
+    `ConceptMatch.tag`, when recording per-value provenance.
+
+    `ConceptMatch.tag`/`.taxonomy`/`.unit` are still populated from the
+    highest-priority tag that had any data at all, for callers that just want
+    a simple "which tag matched" answer (e.g. logging) and don't care about
+    the merge.
+
+    When the SAME period (same `start`+`end`+`fp`) is reported under two
+    different tags, we deduplicate: if the values agree, we keep only the
+    higher-priority tag's entry (not a real conflict, just tag overlap /
+    duplicate coverage). If the values genuinely differ, we keep both entries
+    (each still tagged `_tag_priority`) and mark them `_conflicting=True` so
+    the caller can surface `DataStatus.CONFLICTING` instead of silently
+    picking one -- no fabrication, no silent guessing.
     """
     candidates = CONCEPT_TAG_CANDIDATES.get(concept, [])
     facts_by_taxonomy = company_facts.get("facts", {})
 
-    for tag in candidates:
+    primary_tag: Optional[str] = None
+    primary_taxonomy: Optional[str] = None
+    primary_unit: Optional[str] = None
+    merged: dict[tuple, dict[str, Any]] = {}  # period key -> chosen entry (lowest priority number wins on tie)
+
+    for priority, tag in enumerate(candidates):
         for taxonomy in TAXONOMIES:
             taxonomy_facts = facts_by_taxonomy.get(taxonomy, {})
             tag_entry = taxonomy_facts.get(tag)
@@ -191,16 +227,55 @@ def resolve_concept(concept: str, company_facts: dict[str, Any]) -> ConceptMatch
             unit_facts = units.get(unit_key) or []
             if not unit_facts:
                 continue
-            return ConceptMatch(
-                concept=concept,
-                matched=True,
-                tag=tag,
-                taxonomy=taxonomy,
-                unit=unit_key,
-                facts=unit_facts,
-            )
 
-    return ConceptMatch(concept=concept, matched=False)
+            if primary_tag is None:
+                primary_tag, primary_taxonomy, primary_unit = tag, taxonomy, unit_key
+
+            for entry in unit_facts:
+                key = (entry.get("start"), entry.get("end"), entry.get("fp"), entry.get("accn"))
+                enriched = dict(entry)
+                enriched["_xbrl_tag"] = tag
+                enriched["_tag_priority"] = priority
+                existing = merged.get(key)
+                if existing is None:
+                    merged[key] = enriched
+                    continue
+                # Same (start, end, fp, accn) already merged from a different
+                # tag -- shouldn't normally happen (accn differs across
+                # filings) but keep the higher-priority one defensively.
+                if enriched["_tag_priority"] < existing["_tag_priority"]:
+                    merged[key] = enriched
+
+            # Only try the first taxonomy that has data for this tag.
+            break
+
+    if primary_tag is None:
+        return ConceptMatch(concept=concept, matched=False)
+
+    # Second pass: detect genuine value conflicts between different tags for
+    # the exact same reporting period (same start/end/fp, different accn --
+    # i.e. two different filings/tags both claim to report this period).
+    by_period: dict[tuple, list[dict[str, Any]]] = {}
+    for entry in merged.values():
+        period_key = (entry.get("start"), entry.get("end"), entry.get("fp"))
+        by_period.setdefault(period_key, []).append(entry)
+
+    all_facts: list[dict[str, Any]] = []
+    for period_key, entries in by_period.items():
+        distinct_vals = {e.get("val") for e in entries}
+        if len(distinct_vals) > 1:
+            for e in entries:
+                e["_conflicting"] = True
+        all_facts.extend(entries)
+
+    return ConceptMatch(
+        concept=concept,
+        matched=True,
+        tag=primary_tag,
+        taxonomy=primary_taxonomy,
+        unit=primary_unit,
+        facts=all_facts,
+    )
 
 
 def resolve_all_concepts(company_facts: dict[str, Any]) -> dict[str, ConceptMatch]:

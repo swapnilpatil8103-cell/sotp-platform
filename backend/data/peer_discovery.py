@@ -33,6 +33,11 @@ from typing import Any, Optional
 
 from backend.data.business_classifier import BusinessClassification, classify_business
 from backend.data.concept_mapping import resolve_concept
+from backend.data.historical_analysis import (
+    available_fiscal_years,
+    compute_cagr,
+    normalize_company_facts_multi_year,
+)
 from backend.data.normalizer import _pick_fact_for_period
 from backend.services.sec_client import SECConnector, SECError
 
@@ -66,6 +71,27 @@ class CandidateFinancialFact:
 
 
 @dataclass
+class SimilarityScore:
+    """Composite peer-similarity score: revenue-proximity + margin + growth.
+
+    Never fabricated -- each dimension is either computed from real REPORTED
+    facts or comes back None with a caveat explaining why (missing data),
+    in which case that dimension is excluded from the weighted average and
+    the candidate's `data_completeness` drops, pushing it lower in the
+    ranking rather than crediting it with fabricated similarity.
+    """
+
+    revenue_proximity_score: Optional[float]  # 0..1, 1 = identical revenue
+    operating_margin_pct: Optional[float]
+    revenue_cagr_pct: Optional[float]
+    margin_similarity_score: Optional[float]  # 0..1, 1 = identical margin to target
+    growth_similarity_score: Optional[float]  # 0..1, 1 = identical CAGR to target
+    data_completeness: float  # fraction of the 3 dimensions actually available (0..1)
+    composite_score: float  # 0..1, higher = better comp; penalized by data_completeness
+    caveats: list[str] = field(default_factory=list)
+
+
+@dataclass
 class PeerCandidate:
     cik10: str
     ticker: Optional[str]
@@ -76,6 +102,7 @@ class PeerCandidate:
     frame_concept: str
     frame_value: float
     financials: list[CandidateFinancialFact] = field(default_factory=list)
+    similarity: Optional[SimilarityScore] = None
 
 
 @dataclass
@@ -123,7 +150,7 @@ def _fetch_candidate_financials(client: SECConnector, cik10: str) -> list[Candid
                 CandidateFinancialFact(concept=concept, value=None, unit=None, xbrl_tag=match.tag, data_status="MISSING")
             )
             continue
-        fact_entry = _pick_fact_for_period(match.facts, fy, "FY")
+        fact_entry, is_conflicting = _pick_fact_for_period(match.facts, fy, "FY")
         if fact_entry is None:
             results.append(
                 CandidateFinancialFact(concept=concept, value=None, unit=match.unit, xbrl_tag=match.tag, data_status="MISSING")
@@ -134,11 +161,104 @@ def _fetch_candidate_financials(client: SECConnector, cik10: str) -> list[Candid
                 concept=concept,
                 value=fact_entry.get("val"),
                 unit=match.unit,
-                xbrl_tag=match.tag,
-                data_status="REPORTED",
+                xbrl_tag=fact_entry.get("_xbrl_tag", match.tag),
+                data_status="CONFLICTING" if is_conflicting else "REPORTED",
             )
         )
     return results
+
+
+def _operating_margin_from_financials(financials: list[CandidateFinancialFact]) -> Optional[float]:
+    """Operating margin % = operating_income / revenue, REPORTED-only on both sides."""
+    by_concept = {f.concept: f for f in financials}
+    revenue = by_concept.get("revenue")
+    op_income = by_concept.get("operating_income")
+    if (
+        revenue is None
+        or op_income is None
+        or revenue.data_status != "REPORTED"
+        or op_income.data_status != "REPORTED"
+        or not revenue.value
+    ):
+        return None
+    return (op_income.value / revenue.value) * 100.0
+
+
+def _revenue_cagr_pct(client: SECConnector, cik10: str) -> Optional[float]:
+    """Revenue CAGR % over the CIK's available REPORTED history, reusing
+    backend.data.historical_analysis (no duplicated CAGR math). Returns None
+    (never fabricated) if fewer than 2 REPORTED revenue years are available."""
+    try:
+        company_facts = client.get_company_facts(cik10)
+    except SECError:
+        return None
+
+    years = available_fiscal_years(company_facts, fiscal_period="FY", concepts=["revenue"])
+    if len(years) < 2:
+        return None
+
+    facts = normalize_company_facts_multi_year(
+        company_id=0,
+        company_facts=company_facts,
+        fiscal_years=years,
+        fiscal_period="FY",
+        cik10=cik10,
+        concepts=["revenue"],
+    )
+    year_values = [
+        _YearValueShim(fiscal_year=f.fiscal_year, value=f.value, data_status=f.data_status.value)
+        for f in facts
+        if f.concept == "revenue"
+    ]
+    year_values.sort(key=lambda y: y.fiscal_year)
+    cagr = compute_cagr(year_values, concept="revenue")
+    return cagr.cagr_pct if not cagr.insufficient_history else None
+
+
+@dataclass
+class _YearValueShim:
+    """Local stand-in matching historical_analysis.YearValue's shape (avoids
+    importing a private/internal name; compute_cagr only reads these three
+    attributes)."""
+
+    fiscal_year: int
+    value: Optional[float]
+    data_status: str
+
+
+def _similarity_from_diff(candidate: Optional[float], target: Optional[float], scale: float) -> Optional[float]:
+    """0..1 similarity score from an absolute difference, using a soft decay
+    (1 / (1 + |diff| / scale)). `scale` sets how quickly similarity decays
+    (e.g. scale=10 means a 10-point gap in margin% roughly halves the score).
+    None in, None out -- no fabrication when either side is missing."""
+    if candidate is None or target is None:
+        return None
+    diff = abs(candidate - target)
+    return 1.0 / (1.0 + diff / scale)
+
+
+def _composite_similarity(
+    *,
+    revenue_proximity_score: Optional[float],
+    margin_similarity_score: Optional[float],
+    growth_similarity_score: Optional[float],
+    weights: tuple[float, float, float] = (0.3, 0.35, 0.35),
+) -> tuple[float, float]:
+    """Weighted average of the 3 dimensions that are actually available,
+    then multiplied by data_completeness (fraction of dims available) so a
+    candidate missing data ranks below an equally-similar candidate with
+    full data, rather than being scored as if it were equally trustworthy.
+
+    Returns (composite_score, data_completeness).
+    """
+    dims = [revenue_proximity_score, margin_similarity_score, growth_similarity_score]
+    available = [(d, w) for d, w in zip(dims, weights) if d is not None]
+    data_completeness = len(available) / len(dims)
+    if not available:
+        return 0.0, 0.0
+    weight_sum = sum(w for _, w in available)
+    weighted_avg = sum(d * w for d, w in available) / weight_sum
+    return weighted_avg * data_completeness, data_completeness
 
 
 def discover_peer_candidates(
@@ -193,6 +313,23 @@ def discover_peer_candidates(
 
     ticker_map = client._load_ticker_map()  # noqa: SLF001 -- reuse existing cached ticker map
 
+    # Target's own margin/growth profile, computed once, used as the similarity
+    # baseline below. Real REPORTED-derived only -- None (not fabricated) if
+    # the target's own financials don't support the computation.
+    target_margin_pct: Optional[float] = None
+    target_growth_pct: Optional[float] = None
+    if fetch_financials:
+        target_financials = _fetch_candidate_financials(client, target_cik10)
+        target_margin_pct = _operating_margin_from_financials(target_financials)
+        target_growth_pct = _revenue_cagr_pct(client, target_cik10)
+
+    # Widest revenue gap in the raw shortlist, used to normalize the
+    # proximity signal already computed above (sort by abs diff) into a 0..1
+    # score comparable to the margin/growth similarity scores.
+    max_revenue_gap = 0.0
+    if target_value is not None and shortlist_raw:
+        max_revenue_gap = max(abs((d.get("val") or 0) - target_value) for d in shortlist_raw) or 1.0
+
     candidates: list[PeerCandidate] = []
     for entry in shortlist_raw:
         cik10 = str(entry.get("cik")).zfill(10)
@@ -207,6 +344,50 @@ def discover_peer_candidates(
 
         financials = _fetch_candidate_financials(client, cik10) if fetch_financials else []
 
+        similarity: Optional[SimilarityScore] = None
+        if fetch_financials:
+            caveats: list[str] = []
+
+            revenue_proximity_score: Optional[float] = None
+            if target_value is not None and max_revenue_gap:
+                gap = abs((entry.get("val") or 0) - target_value)
+                revenue_proximity_score = max(0.0, 1.0 - gap / max_revenue_gap)
+            else:
+                caveats.append("Revenue proximity unavailable: target did not report the frame concept.")
+
+            candidate_margin_pct = _operating_margin_from_financials(financials)
+            margin_similarity_score = _similarity_from_diff(candidate_margin_pct, target_margin_pct, scale=10.0)
+            if margin_similarity_score is None:
+                caveats.append(
+                    "Margin similarity unavailable: missing REPORTED revenue/operating_income for the "
+                    "candidate and/or the target -- not scored as similar."
+                )
+
+            candidate_growth_pct = _revenue_cagr_pct(client, cik10)
+            growth_similarity_score = _similarity_from_diff(candidate_growth_pct, target_growth_pct, scale=15.0)
+            if growth_similarity_score is None:
+                caveats.append(
+                    "Growth similarity unavailable: fewer than 2 REPORTED revenue years for the candidate "
+                    "and/or the target -- not scored as similar."
+                )
+
+            composite_score, data_completeness = _composite_similarity(
+                revenue_proximity_score=revenue_proximity_score,
+                margin_similarity_score=margin_similarity_score,
+                growth_similarity_score=growth_similarity_score,
+            )
+
+            similarity = SimilarityScore(
+                revenue_proximity_score=revenue_proximity_score,
+                operating_margin_pct=candidate_margin_pct,
+                revenue_cagr_pct=candidate_growth_pct,
+                margin_similarity_score=margin_similarity_score,
+                growth_similarity_score=growth_similarity_score,
+                data_completeness=data_completeness,
+                composite_score=composite_score,
+                caveats=caveats,
+            )
+
         candidates.append(
             PeerCandidate(
                 cik10=cik10,
@@ -218,7 +399,17 @@ def discover_peer_candidates(
                 frame_concept=frame_concept_tag,
                 frame_value=entry.get("val"),
                 financials=financials,
+                similarity=similarity,
             )
+        )
+
+    # Re-rank by composite similarity (margin+growth+revenue-proximity),
+    # not just revenue-proximity, when we actually computed it. Candidates
+    # missing similarity data (fetch_financials=False) keep frame order.
+    if fetch_financials:
+        candidates.sort(
+            key=lambda c: c.similarity.composite_score if c.similarity else 0.0,
+            reverse=True,
         )
 
     note = None

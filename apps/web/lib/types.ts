@@ -160,6 +160,63 @@ export interface CompanySegmentsRead {
   note?: string | null;
 }
 
+// --- historical trends ---------------------------------------------------
+
+export interface YearValueRead {
+  fiscal_year: number;
+  value?: number | null;
+  data_status: DataStatus | string;
+}
+
+export interface CagrRead {
+  concept: string;
+  insufficient_history: boolean;
+  reason?: string | null;
+  start_year?: number | null;
+  end_year?: number | null;
+  start_value?: number | null;
+  end_value?: number | null;
+  num_years?: number | null;
+  cagr_pct?: number | null;
+  data_status: string;
+}
+
+export interface MarginTrendRead {
+  concept: string;
+  insufficient_history: boolean;
+  reason?: string | null;
+  years: YearValueRead[];
+  min_margin_pct?: number | null;
+  max_margin_pct?: number | null;
+  latest_margin_pct?: number | null;
+  average_margin_pct?: number | null;
+  data_status: string;
+}
+
+export interface ForwardSuggestionRead {
+  concept: string;
+  insufficient_history: boolean;
+  reason?: string | null;
+  basis?: string | null;
+  suggested_annual_growth_pct?: number | null;
+  suggested_years?: number[] | null;
+  suggested_values?: number[] | null;
+  label: string;
+}
+
+export interface HistoricalTrendsRead {
+  ticker: string;
+  cik: string;
+  company_id: number;
+  fiscal_period: string;
+  fiscal_years_covered: number[];
+  series: Record<string, YearValueRead[]>;
+  revenue_cagr: CagrRead;
+  net_income_cagr: CagrRead;
+  operating_margin_trend: MarginTrendRead;
+  suggested_forward_revenue: ForwardSuggestionRead;
+}
+
 // --- valuation: DCF -----------------------------------------------------
 
 export interface DcfInput {
@@ -177,6 +234,7 @@ export interface DcfInput {
   investments?: number;
   minority_interest?: number;
   diluted_shares_outstanding: number;
+  exit_multiple?: number | null;
 }
 
 export interface DcfYearProjection {
@@ -200,6 +258,12 @@ export interface DcfResult {
   enterprise_value: number;
   equity_value: number;
   implied_price_per_share: number;
+  terminal_year_ebitda?: number | null;
+  exit_multiple_terminal_value_undiscounted?: number | null;
+  exit_multiple_terminal_value_discounted?: number | null;
+  exit_multiple_enterprise_value?: number | null;
+  exit_multiple_equity_value?: number | null;
+  exit_multiple_implied_price_per_share?: number | null;
 }
 
 // --- valuation: comps -----------------------------------------------------
@@ -479,6 +543,99 @@ export interface DiffResponse {
   unchanged_field_count: number;
   key_changes: Record<string, unknown>[];
   summary: string;
+}
+
+// --- segment auto-valuation (SUGGESTED, pre-fill only) ---------------------
+
+export interface SegmentFactsInput {
+  name: string;
+  revenue?: number | null;
+  revenue_status?: string;
+  ebit?: number | null;
+  ebit_status?: string;
+}
+
+export interface SegmentMultipleAssumptionInput {
+  metric: "ev_to_revenue" | "ev_to_ebit";
+  multiple_value: number;
+}
+
+export interface SegmentDcfAssumptionInput {
+  revenue_growth_rates: number[];
+  ebit_margins: number[];
+  tax_rate: number;
+  da_pct_of_revenue: number[];
+  capex_pct_of_revenue: number[];
+  nwc_change_pct_of_revenue: number[];
+  wacc: number;
+  terminal_growth_rate: number;
+  exit_multiple?: number | null;
+}
+
+export interface SegmentValuationRequestInput {
+  segment: SegmentFactsInput;
+  methodology: "multiple" | "dcf";
+  multiple_assumption?: SegmentMultipleAssumptionInput | null;
+  dcf_assumption?: SegmentDcfAssumptionInput | null;
+}
+
+export interface AutoValueSegmentsRequest {
+  segments: SegmentValuationRequestInput[];
+}
+
+export interface SegmentValuationSuggestion {
+  segment_name: string;
+  methodology: "multiple" | "dcf";
+  status: "SUGGESTED" | "ERROR";
+  error?: string | null;
+  suggested_enterprise_value?: number | null;
+  dcf_result?: DcfResult | null;
+  data_status: string;
+  requires_review: boolean;
+}
+
+export interface AutoValueSegmentsResponse {
+  suggestions: SegmentValuationSuggestion[];
+  governance_note: string;
+}
+
+// --- peer-informed beta (SUGGESTED, pre-fill only) --------------------------
+
+export interface PeerBetaInputRow {
+  name: string;
+  levered_beta: number;
+  debt_to_equity?: number | null;
+  tax_rate?: number | null;
+}
+
+export interface BetaAnalysisInput {
+  peers: PeerBetaInputRow[];
+  aggregation: "median" | "average";
+  target_debt_to_equity: number;
+  target_tax_rate: number;
+}
+
+export interface PeerUnleveredBeta {
+  name: string;
+  levered_beta: number;
+  debt_to_equity: number;
+  tax_rate: number;
+  unlevered_beta: number;
+}
+
+export interface SkippedPeer {
+  name: string;
+  reason: string;
+}
+
+export interface BetaAnalysisResult {
+  used_peers: PeerUnleveredBeta[];
+  skipped_peers: SkippedPeer[];
+  aggregation: "median" | "average";
+  unlevered_beta_aggregate: number;
+  target_debt_to_equity: number;
+  target_tax_rate: number;
+  relevered_beta: number;
 }
 
 export interface AuditTrailEntryOut {

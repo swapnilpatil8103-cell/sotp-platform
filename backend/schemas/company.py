@@ -102,6 +102,61 @@ class InstitutionalHoldingRead(BaseModel):
     data_status: str
 
 
+class YearValueRead(BaseModel):
+    fiscal_year: int
+    value: Optional[float] = None
+    data_status: str
+
+
+class CagrRead(BaseModel):
+    concept: str
+    insufficient_history: bool
+    reason: Optional[str] = None
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+    start_value: Optional[float] = None
+    end_value: Optional[float] = None
+    num_years: Optional[int] = None
+    cagr_pct: Optional[float] = None
+    data_status: str = "DERIVED"
+
+
+class MarginTrendRead(BaseModel):
+    concept: str
+    insufficient_history: bool
+    reason: Optional[str] = None
+    years: list[YearValueRead] = []
+    min_margin_pct: Optional[float] = None
+    max_margin_pct: Optional[float] = None
+    latest_margin_pct: Optional[float] = None
+    average_margin_pct: Optional[float] = None
+    data_status: str = "DERIVED"
+
+
+class ForwardSuggestionRead(BaseModel):
+    concept: str
+    insufficient_history: bool
+    reason: Optional[str] = None
+    basis: Optional[str] = None
+    suggested_annual_growth_pct: Optional[float] = None
+    suggested_years: Optional[list[int]] = None
+    suggested_values: Optional[list[float]] = None
+    label: str = "SUGGESTED"
+
+
+class HistoricalTrendsRead(BaseModel):
+    ticker: str
+    cik: str
+    company_id: int
+    fiscal_period: str
+    fiscal_years_covered: list[int]
+    series: dict[str, list[YearValueRead]]
+    revenue_cagr: CagrRead
+    net_income_cagr: CagrRead
+    operating_margin_trend: MarginTrendRead
+    suggested_forward_revenue: ForwardSuggestionRead
+
+
 class MarketDataRead(BaseModel):
     ticker: str
     price: Optional[float] = None

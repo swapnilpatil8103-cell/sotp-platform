@@ -57,6 +57,30 @@ Status legend: **DONE** / **PARTIAL** / **NOT DONE**.
   Gemini key on this machine lives in the gitignored `.env` file, not in
   source.
 
+## Post-Phase-10 additions
+
+Three further improvements were added after the Phase 10 audit above (still
+subject to the same "AI suggests, human decides" governance principle):
+
+- **Automated per-segment valuation** (`backend/valuation/segment_valuation.py`,
+  `POST /valuation/{ticker}/segments/auto-value`) — composes the existing
+  `run_dcf`/multiple-application arithmetic at segment level to produce
+  SUGGESTED segment EVs that pre-fill (never bypass) the SOTP form.
+- **Peer-informed beta** (`backend/valuation/beta_analysis.py`,
+  `POST /valuation/wacc/peer-beta`) — Hamada unlever/relever across a peer
+  set, skipping any peer missing real D/E or tax-rate data. SUGGESTED only;
+  the DCF page's toggle pre-fills the Beta field without auto-submitting it.
+- **Dual DCF terminal value** (`backend/valuation/dcf.py`) — an optional
+  `exit_multiple` input on `DcfInput` adds an independent Exit Multiple
+  terminal value/EV/equity/price alongside (never replacing) the existing
+  Gordon Growth result; omitted by default, so existing callers see
+  unchanged behavior.
+
+Unit tests: `backend/tests/test_segment_valuation.py`,
+`backend/tests/test_beta_analysis.py`,
+`backend/tests/test_valuation_dcf_dual_tv.py`. Full suite: 233 → 255 passing
+(22 new tests), no regressions.
+
 ## Summary
 
 Of 40 checklist items: **38 DONE**, **2 NOT DONE** (authentication,

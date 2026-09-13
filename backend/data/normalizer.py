@@ -22,28 +22,108 @@ from backend.models.financial_fact import FinancialFact
 
 SEC_SOURCE = "SEC XBRL"
 
+# Concepts whose XBRL `end` date is NOT a fiscal-period end and so must be
+# excluded from any scan that infers a fiscal year from `end` (see
+# `_true_fiscal_year`). `shares_outstanding` (dei:EntityCommonStockSharesOutstanding)
+# is a cover-page "as of" fact: its `end` is the 10-K/10-Q *filing* cover date
+# (e.g. an FY2025 10-K filed in Feb 2026 reports shares outstanding "as of
+# 2026-01-31" with fp="FY" but end=2026-01-31), which would otherwise get
+# misread as fiscal year 2026. Confirmed against real JPM XBRL data.
+YEAR_SCAN_EXCLUDED_CONCEPTS = {"shares_outstanding"}
+
+
+def _true_fiscal_year(fact: dict[str, Any]) -> Optional[int]:
+    """Derive the ACTUAL fiscal year a fact's period covers, from its own `end` date.
+
+    Do not use this on facts you haven't already confirmed match the requested
+    `fp`/period length -- this only extracts a calendar year from `end`.
+    """
+    end = _parse_date(fact.get("end"))
+    if end is None:
+        return None
+    return end.year
+
 
 def _pick_fact_for_period(
     unit_facts: list[dict[str, Any]],
     fiscal_year: int,
     fiscal_period: str,
-) -> Optional[dict[str, Any]]:
+) -> tuple[Optional[dict[str, Any]], bool]:
     """Pick the XBRL fact entry matching the requested fiscal year + period (e.g. FY/Q1..Q4).
+
+    Returns ``(fact_entry, is_conflicting)``. ``fact_entry`` is ``None`` when
+    nothing matches the period. ``is_conflicting`` is True when
+    `concept_mapping.resolve_concept` found two different candidate XBRL tags
+    genuinely disagreeing on the value for this exact period (see its
+    docstring) -- callers should surface `DataStatus.CONFLICTING` rather than
+    reporting the chosen value as a plain REPORTED fact. Each `unit_facts`
+    entry (post-merge) also carries its own `_xbrl_tag` -- use that for
+    per-value provenance instead of a single company-wide tag, since the
+    merged list can now span more than one literal XBRL tag.
 
     XBRL "units" entries look like:
     {"end": "2023-09-30", "val": 123, "fy": 2023, "fp": "FY", "form": "10-K",
      "filed": "2023-11-03", "start": "2022-10-01", "accn": "0000320193-23-000106"}
 
-    We match on fy/fp when present, preferring 10-K/10-Q forms (skips amendments
-    like 10-K/A only if a non-amended match exists first... but SEC data doesn't
-    always distinguish; we just take the first fy/fp match, most-recently filed).
+    IMPORTANT / BUG HISTORY: this used to match on SEC's raw `fy` field
+    (`f.get("fy") == fiscal_year`). That field is NOT the calendar fiscal year
+    the period covers -- it's metadata about which annual filing's XBRL
+    submission the datapoint was tagged under (a given period commonly shows
+    up tagged with several different `fy` values because it's re-reported as
+    a prior-year comparative column in later 10-Ks). E.g. real GOOGL XBRL data
+    has the period 2020-01-01/2020-12-31 tagged `fy=2022` (because it appears
+    as a comparative column in the FY2022 10-K), so matching on raw `fy` would
+    silently return actual-FY2020 revenue when asked for FY2022 -- shifting an
+    entire historical series by ~2 years. This is a real, confirmed SEC XBRL
+    quirk, not a hypothetical.
+    #
+    # The correct, standard convention (also how companies with a non-calendar
+    # fiscal year-end label their own fiscal years, e.g. Apple's FY2024 ended
+    # September 2024) is: the fiscal year of an annual/instant fact is the
+    # calendar year in which the period's `end` date falls. We derive that
+    # from `end` ourselves instead of trusting `fy`. `fp` is still used to
+    # select the right period *type* (FY vs Q1..Q4), and for annual facts we
+    # additionally sanity-check the duration is ~annual (not a stray quarterly
+    # entry that happens to share fp="FY" metadata) so we don't conflate
+    # annual and quarterly windows.
     """
-    matches = [f for f in unit_facts if f.get("fy") == fiscal_year and f.get("fp") == fiscal_period]
-    if not matches:
-        return None
-    # Prefer the most recently filed value in case of duplicates/restatements.
-    matches.sort(key=lambda f: f.get("filed", ""), reverse=True)
-    return matches[0]
+    fp_matches = [f for f in unit_facts if f.get("fp") == fiscal_period]
+
+    candidates = []
+    for f in fp_matches:
+        end = _parse_date(f.get("end"))
+        if end is None or end.year != fiscal_year:
+            continue
+        if fiscal_period == "FY":
+            start = _parse_date(f.get("start"))
+            if start is not None:
+                duration_days = (end - start).days
+                # Annual periods run ~350-380 days; reject anything shorter
+                # (e.g. a stray quarterly-length entry mislabeled fp="FY").
+                if duration_days < 300:
+                    continue
+        else:
+            # Quarterly: reject anything that looks like an annual-length
+            # duration accidentally carrying a quarterly fp.
+            start = _parse_date(f.get("start"))
+            if start is not None:
+                duration_days = (end - start).days
+                if duration_days > 130:
+                    continue
+        candidates.append(f)
+
+    if not candidates:
+        return None, False
+    # Stable multi-key sort (least-significant key sorted first): prefer the
+    # most recently filed value in case of duplicates/restatements *within* a
+    # tag, then -- as the dominant key -- prefer the higher-priority
+    # candidate XBRL tag (lower `_tag_priority` == earlier/more-specific
+    # candidate, per concept_mapping.resolve_concept's merge order).
+    candidates.sort(key=lambda f: f.get("filed", ""), reverse=True)
+    candidates.sort(key=lambda f: f.get("_tag_priority", 0))
+    chosen = candidates[0]
+    is_conflicting = bool(chosen.get("_conflicting"))
+    return chosen, is_conflicting
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
@@ -101,7 +181,7 @@ def normalize_company_facts(
             )
             continue
 
-        fact_entry = _pick_fact_for_period(match.facts, fiscal_year, fiscal_period)
+        fact_entry, is_conflicting = _pick_fact_for_period(match.facts, fiscal_year, fiscal_period)
 
         if fact_entry is None:
             results.append(
@@ -147,8 +227,8 @@ def normalize_company_facts(
                 source=SEC_SOURCE,
                 source_url=source_url,
                 accession_number=accession,
-                xbrl_tag=match.tag,
-                data_status=DataStatus.REPORTED,
+                xbrl_tag=fact_entry.get("_xbrl_tag", match.tag),
+                data_status=DataStatus.CONFLICTING if is_conflicting else DataStatus.REPORTED,
             )
         )
 
@@ -156,15 +236,25 @@ def normalize_company_facts(
 
 
 def latest_available_fiscal_year(company_facts: dict[str, Any], fiscal_period: str = "FY") -> Optional[int]:
-    """Best-effort scan across all concepts to find the most recent fiscal year with any data."""
+    """Best-effort scan across all concepts to find the most recent fiscal year with any data.
+
+    Derives fiscal year from each fact's own `end` date, NOT SEC's raw `fy`
+    metadata field -- see the comment on `_pick_fact_for_period` for why `fy`
+    cannot be trusted for this.
+    """
     years: set[int] = set()
     for concept in CANONICAL_CONCEPTS:
+        if concept in YEAR_SCAN_EXCLUDED_CONCEPTS:
+            continue
         match = resolve_concept(concept, company_facts)
         if not match.matched or not match.facts:
             continue
         for f in match.facts:
-            if f.get("fp") == fiscal_period and isinstance(f.get("fy"), int):
-                years.add(f["fy"])
+            if f.get("fp") != fiscal_period:
+                continue
+            year = _true_fiscal_year(f)
+            if year is not None:
+                years.add(year)
     if not years:
         return None
     return max(years)

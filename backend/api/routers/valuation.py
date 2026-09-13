@@ -42,8 +42,14 @@ from backend.schemas.valuation import (
     SotpInput,
     SotpResult,
 )
+from backend.valuation.beta_analysis import BetaAnalysisInput, BetaAnalysisResult, run_beta_analysis
 from backend.valuation.comps import run_comps
 from backend.valuation.dcf import run_dcf
+from backend.valuation.segment_valuation import (
+    AutoValueSegmentsRequest,
+    AutoValueSegmentsResponse,
+    value_segments,
+)
 from backend.valuation.sensitivity import dcf_sensitivity
 from backend.valuation.sotp import run_sotp
 
@@ -115,6 +121,61 @@ def compute_dcf_sensitivity(payload: DcfSensitivityRequestPayload):
             payload.output_field,
         )
     except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{ticker}/segments/auto-value", response_model=AutoValueSegmentsResponse)
+def auto_value_segments(ticker: str, payload: AutoValueSegmentsRequest):
+    """Automated per-segment valuation suggestions (multiple or DCF method,
+    per segment) over the real segment list + explicit human-supplied
+    methodology/assumption choices. Composes the existing run_dcf/run_comps-
+    style arithmetic at segment level -- no new valuation math.
+
+    Every returned figure is tagged SUGGESTED / requires_review=True and is
+    meant to pre-fill (never bypass) the SOTP segment EV fields on the
+    frontend; nothing here writes an AssumptionDecision or ValuationRun. A
+    segment missing the REPORTED data its chosen method needs comes back
+    with status="ERROR" and a clear reason, never a fabricated value.
+    `ticker` is accepted for URL/routing symmetry with the rest of this API
+    (matching /companies/{ticker}/...) but this endpoint is pure compute over
+    the caller-supplied segment list, like /valuation/sotp and /valuation/dcf.
+    """
+    return value_segments(payload)
+
+
+@router.post("/wacc/peer-beta", response_model=BetaAnalysisResult)
+def compute_peer_informed_beta(payload: BetaAnalysisInput):
+    """Unlever each peer's levered beta (Hamada), aggregate (median/average),
+    then relever at the target's own D/E and tax rate -- a SUGGESTED,
+    peer-informed beta for the WACC/Ke input. Pure deterministic math, no AI.
+
+    Peers missing real debt_to_equity/tax_rate are skipped and reported
+    (never fabricated). The result never substitutes into a WACC computation
+    automatically -- callers/frontend must let a human review it before using
+    it as the `beta` field on POST /valuation/wacc (not itself wired here;
+    see backend/valuation/wacc.py for that pure computation).
+    """
+    try:
+        return run_beta_analysis(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/wacc", response_model=None)
+def compute_wacc_endpoint(payload: dict):
+    """Thin pass-through to backend.valuation.wacc.compute_wacc (previously
+    unwired). Kept schema-loose (dict) here since WaccInput/WaccResult are
+    already fully defined in backend/schemas/valuation.py; this just gives
+    the frontend WACC toggle (peer-informed beta pre-fill) a real endpoint to
+    submit reviewed/edited WACC inputs to, same pure-compute-no-persistence
+    convention as /valuation/sotp and /valuation/dcf.
+    """
+    from backend.schemas.valuation import WaccInput
+    from backend.valuation.wacc import compute_wacc
+
+    try:
+        return compute_wacc(WaccInput(**payload))
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
