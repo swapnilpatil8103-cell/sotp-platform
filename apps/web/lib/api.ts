@@ -13,6 +13,7 @@ import type {
   AutoValueSegmentsResponse,
   BetaAnalysisInput,
   BetaAnalysisResult,
+  RiskFreeRateSuggestion,
   CompanyFactsRead,
   CompanyIdRead,
   CompanyRead,
@@ -180,6 +181,11 @@ export const computePeerInformedBeta = (payload: BetaAnalysisInput) =>
     method: "POST",
     body: JSON.stringify(payload),
   });
+
+export const getSuggestedRiskFreeRate = (symbol: string = "US10Y") =>
+  request<RiskFreeRateSuggestion>(
+    `/valuation/wacc/risk-free-rate-suggestion?symbol=${encodeURIComponent(symbol)}`
+  );
 
 // --- governance / research history -----------------------------------------
 

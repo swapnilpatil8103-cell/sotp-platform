@@ -95,6 +95,21 @@ usable data. Exposed via `POST /valuation/wacc/peer-beta`, returning a
 (the DCF page's "Use peer-informed beta" toggle pre-fills the Beta field but
 never submits it automatically).
 
+**Risk-free-rate suggestion (optional, `backend/services/macro_data_client.py`).**
+`compute_wacc`'s `risk_free_rate` input may similarly be pre-filled (never
+auto-substituted) from a real, sourced US Treasury yield via the London
+Strategic Edge "vault" API (`GET /vault/ref/bond_yields?symbol=US10Y`, `x-api-key`
+auth) — the only capability wired in from that provider; its market-price and
+"financial reports" endpoints are redundant with, and less transparently
+sourced than, the SEC XBRL pipeline and yfinance client already in this
+codebase, so they are intentionally not used. Exposed via
+`GET /valuation/wacc/risk-free-rate-suggestion`, returning the latest
+available close explicitly labeled `SUGGESTED`; requires `LSE_API_KEY`
+configured, and degrades to a 503 (risk-free rate stays a manual input) if
+unset or unreachable — never a fabricated rate. Cached 12h (treasury yields
+update once per trading day). The DCF page's "Use latest 10Y treasury yield"
+button pre-fills the field but never submits it automatically.
+
 ### 2. DCF (`backend/valuation/dcf.py`)
 
 For each forecast year `i` (from explicit, caller-supplied per-year

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { computeDcf, computePeerInformedBeta } from "@/lib/api";
+import { computeDcf, computePeerInformedBeta, getSuggestedRiskFreeRate } from "@/lib/api";
 import type { BetaAnalysisResult, DcfInput, DcfResult, PeerBetaInputRow } from "@/lib/types";
 import { AIBadge, Card, ErrorState, MetricCard, SectionHeading, Table } from "@/components/ui";
 import { DcfProjectionChart } from "@/components/charts";
@@ -40,6 +40,28 @@ export default function DcfPage({ params }: { params: { ticker: string } }) {
   const [peerBetaLoading, setPeerBetaLoading] = useState(false);
   const [peerBetaError, setPeerBetaError] = useState<unknown>(null);
   const [betaIsSuggested, setBetaIsSuggested] = useState(false);
+
+  // Risk-free rate (SUGGESTED, pre-fill only) -- GET /valuation/wacc/risk-free-rate-suggestion.
+  const [riskFreeRate, setRiskFreeRate] = useState(0.042);
+  const [rfrLoading, setRfrLoading] = useState(false);
+  const [rfrError, setRfrError] = useState<unknown>(null);
+  const [rfrIsSuggested, setRfrIsSuggested] = useState(false);
+  const [rfrAsOf, setRfrAsOf] = useState<string | null>(null);
+
+  async function useSuggestedRiskFreeRate() {
+    setRfrLoading(true);
+    setRfrError(null);
+    try {
+      const r = await getSuggestedRiskFreeRate();
+      setRiskFreeRate(r.rate_pct);
+      setRfrIsSuggested(true);
+      setRfrAsOf(r.as_of_date);
+    } catch (err) {
+      setRfrError(err);
+    } finally {
+      setRfrLoading(false);
+    }
+  }
 
   // Placeholder peer set for the demo toggle -- in a full integration this
   // would come from GET /companies/{ticker}/peer-candidates real financials.
@@ -184,6 +206,49 @@ export default function DcfPage({ params }: { params: { ticker: string } }) {
                 Skipped: {peerBetaResult.skipped_peers.map((p) => `${p.name} (${p.reason})`).join("; ")}
               </>
             )}
+          </p>
+        )}
+      </Card>
+
+      <Card
+        title="WACC — Risk-free rate"
+        subtitle="Cost-of-equity input feeding CAPM. Optionally pre-fill it with the latest real US 10Y Treasury yield (London Strategic Edge vault API) — reviewable, never forced."
+      >
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+          <div>
+            <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#111827]/60">
+              Risk-free rate {rfrIsSuggested && <AIBadge label="Suggested" />}
+            </label>
+            <input
+              type="number"
+              step="0.001"
+              value={riskFreeRate}
+              onChange={(e) => {
+                setRiskFreeRate(Number(e.target.value));
+                setRfrIsSuggested(false);
+              }}
+              className="w-full rounded-[8px] border border-[#E5E7EB] px-3 py-2 text-sm tabular-nums"
+            />
+          </div>
+          <div className="flex items-end">
+            <button
+              onClick={useSuggestedRiskFreeRate}
+              disabled={rfrLoading}
+              className="w-full rounded-[8px] border border-[#2563EB]/40 bg-[#0B1F3A] px-3 py-2 text-xs font-medium text-white hover:bg-[#0B1F3A]/90 disabled:opacity-50"
+            >
+              {rfrLoading ? "Fetching…" : "Use latest 10Y treasury yield"}
+            </button>
+          </div>
+        </div>
+        {Boolean(rfrError) && (
+          <div className="mt-3">
+            <ErrorState error={rfrError} context="GET /valuation/wacc/risk-free-rate-suggestion (requires LSE_API_KEY configured)" />
+          </div>
+        )}
+        {rfrIsSuggested && rfrAsOf && (
+          <p className="mt-3 text-xs text-[#111827]/60">
+            US 10Y Treasury yield as of {rfrAsOf}: <strong>{(riskFreeRate * 100).toFixed(3)}%</strong> — pre-filled above,
+            still editable. Latest available close, not real-time; a human should still confirm before using it.
           </p>
         )}
       </Card>

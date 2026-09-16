@@ -42,6 +42,7 @@ from backend.schemas.valuation import (
     SotpInput,
     SotpResult,
 )
+from backend.services.macro_data_client import MacroDataClient, MacroDataError
 from backend.valuation.beta_analysis import BetaAnalysisInput, BetaAnalysisResult, run_beta_analysis
 from backend.valuation.comps import run_comps
 from backend.valuation.dcf import run_dcf
@@ -159,6 +160,33 @@ def compute_peer_informed_beta(payload: BetaAnalysisInput):
         return run_beta_analysis(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/wacc/risk-free-rate-suggestion")
+def suggest_risk_free_rate(symbol: str = "US10Y"):
+    """Latest available Treasury yield (London Strategic Edge vault API) as a
+    SUGGESTED risk-free rate for the WACC cost-of-equity input -- a sourced
+    starting point, not an authoritative or real-time rate. A human must
+    still choose to use it; nothing here substitutes into a WACC computation
+    automatically, exactly like the peer-informed-beta suggestion above.
+
+    Returns 503 if LSE_API_KEY isn't configured or the provider is
+    unreachable -- callers should fall back to a manual risk-free-rate input
+    in that case, never a fabricated rate.
+    """
+    try:
+        result = MacroDataClient().get_risk_free_rate_suggestion(symbol)
+    except MacroDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {
+        "symbol": result.symbol,
+        "rate_pct": result.rate_pct,
+        "as_of_date": result.as_of_date,
+        "source": result.source,
+        "fetched_at": result.fetched_at,
+        "label": "SUGGESTED",
+    }
 
 
 @router.post("/wacc", response_model=None)

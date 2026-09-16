@@ -638,6 +638,15 @@ export interface BetaAnalysisResult {
   relevered_beta: number;
 }
 
+export interface RiskFreeRateSuggestion {
+  symbol: string;
+  rate_pct: number;
+  as_of_date: string;
+  source: string;
+  fetched_at: string;
+  label: "SUGGESTED";
+}
+
 export interface AuditTrailEntryOut {
   id: number;
   entity_type: string;
