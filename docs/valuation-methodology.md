@@ -112,6 +112,18 @@ button pre-fills the field but never submits it automatically.
 
 ### 2. DCF (`backend/valuation/dcf.py`)
 
+Inputs are bounded so that nonsense is rejected rather than computed:
+`0 <= tax_rate < 1`; `wacc > -1` (the discount factor is `1 / (1 + wacc)^n`);
+each growth rate in `(-1, 10]` (revenue cannot fall by more than 100% a year);
+each EBIT margin in `[-5, 1]`; `terminal_growth_rate` in `(-1, 1]`;
+`exit_multiple`, if given, in `(0, 1000]`; no `NaN`/`Infinity`. The schema
+cannot rule out every failure — `wacc` just above -1 over a long horizon makes
+a discount factor underflow to zero, and a huge `wacc` overflows — so
+`run_dcf` converts any `ZeroDivisionError`/`OverflowError`, and any result that
+is not finite, into a `ValueError` (a 400 at the API) rather than letting it
+surface as a 500 or as a response full of nulls. D&A, CapEx and NWC
+percentages are intentionally not bounded.
+
 For each forecast year `i` (from explicit, caller-supplied per-year
 schedules — never invented):
 
@@ -190,6 +202,15 @@ P/E  = market_cap / net_income
 P/B  = market_cap / book_value_equity
 ```
 
+A multiple is only computed over a **positive** denominator. Negative EBITDA,
+EBIT, earnings or book value (and non-positive revenue) produce a negative
+"multiple" that says nothing about price relative to earnings and would drag
+the percentiles toward nonsense, so such a peer gets no value (`None`) for that
+multiple and drops out of that metric's statistics, while still counting for
+its other multiples. If every peer is excluded for a metric, that metric simply
+has no statistics row. A *negative enterprise value* (net cash larger than
+market cap) is a numerator problem and is not excluded by this rule.
+
 Summary statistics (min, 25th percentile, median, 75th percentile, max) are
 computed across the peer set via `numpy.percentile`. Applying a chosen
 multiple (also chosen upstream, e.g. the peer median EV/EBITDA) to the
@@ -265,6 +286,11 @@ comps) once per combination of two swapped-out inputs across explicit grids
 chosen-multiple columns for comps), reading off one scalar output field
 (default `implied_price_per_share`) per cell. No new math — purely
 mechanical re-application of the DCF/comps formulas above across a grid.
+Every cell goes through the normal `DcfInput` validation, so a grid value
+outside a field's bound (e.g. `wacc = -1`) fails that run rather than
+producing a number. Through the API (`POST /valuation/sensitivity/dcf`) the
+axes are restricted to scalar numeric `DcfInput` fields, must differ, and are
+capped at 25 values each; see `docs/api-documentation.md`.
 
 ## Inputs and provenance
 

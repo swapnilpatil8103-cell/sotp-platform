@@ -7,9 +7,9 @@ rounding precision) may default.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # --------------------------------------------------------------------------
 # WACC
@@ -17,11 +17,13 @@ from pydantic import BaseModel, Field
 
 
 class WaccInput(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
     risk_free_rate: float = Field(..., description="e.g. current 10y treasury yield, as a decimal (0.04 = 4%)")
     beta: float = Field(..., description="Company/segment levered beta")
     equity_risk_premium: float = Field(..., description="Market equity risk premium, as a decimal")
     cost_of_debt_pretax: float = Field(..., description="Pre-tax cost of debt, as a decimal")
-    tax_rate: float = Field(..., description="Marginal/effective tax rate, as a decimal")
+    tax_rate: float = Field(..., ge=0, lt=1, description="Marginal/effective tax rate, as a decimal, 0 <= t < 1")
     market_value_equity: float = Field(..., gt=0, description="Market value of equity (E)")
     market_value_debt: float = Field(..., ge=0, description="Market value of debt (D)")
 
@@ -40,22 +42,44 @@ class WaccResult(BaseModel):
 # --------------------------------------------------------------------------
 
 
+# Per-year bounds for DCF schedules. Revenue cannot fall by more than 100% in a
+# year (a growth rate <= -1 zeroes or flips the sign of revenue), and 1000%/yr
+# is already far past any real forecast. An EBIT margin cannot exceed 100% of
+# revenue; losses are legitimate, down to -500%.
+GrowthRate = Annotated[float, Field(gt=-1, le=10)]
+EbitMargin = Annotated[float, Field(ge=-5, le=1)]
+
+
 class DcfInput(BaseModel):
+    # NaN/Infinity are never valid inputs; left in, they flow through the maths and
+    # come back as null outputs on a 200.
+    model_config = ConfigDict(allow_inf_nan=False)
+
     base_revenue: float = Field(..., description="Most recent actual/reported revenue, the forecast base year")
-    revenue_growth_rates: list[float] = Field(
-        ..., min_length=1, description="Explicit YoY growth rate per forecast year, one entry per projected year"
+    revenue_growth_rates: list[GrowthRate] = Field(
+        ...,
+        min_length=1,
+        description="Explicit YoY growth rate per forecast year, one entry per projected year; each in (-1, 10]",
     )
-    ebit_margins: list[float] = Field(
-        ..., min_length=1, description="Explicit EBIT margin per forecast year, same length as revenue_growth_rates"
+    ebit_margins: list[EbitMargin] = Field(
+        ...,
+        min_length=1,
+        description="Explicit EBIT margin per forecast year, same length as revenue_growth_rates; each in [-5, 1]",
     )
-    tax_rate: float = Field(..., description="Marginal/effective tax rate applied to EBIT to get NOPAT")
+    tax_rate: float = Field(
+        ..., ge=0, lt=1, description="Marginal/effective tax rate applied to EBIT to get NOPAT, 0 <= t < 1"
+    )
     da_pct_of_revenue: list[float] = Field(..., min_length=1, description="D&A as % of revenue, per forecast year")
     capex_pct_of_revenue: list[float] = Field(..., min_length=1, description="CapEx as % of revenue, per forecast year")
     nwc_change_pct_of_revenue: list[float] = Field(
         ..., min_length=1, description="Change in net working capital as % of revenue, per forecast year"
     )
-    wacc: float = Field(..., description="Discount rate applied to projected FCFF and terminal value")
-    terminal_growth_rate: float = Field(..., description="Perpetuity growth rate (g) used in Gordon Growth terminal value")
+    wacc: float = Field(
+        ..., gt=-1, description="Discount rate applied to projected FCFF and terminal value; must exceed -1 (1 + wacc is divided by)"
+    )
+    terminal_growth_rate: float = Field(
+        ..., gt=-1, le=1, description="Perpetuity growth rate (g) used in Gordon Growth terminal value, in (-1, 1]"
+    )
     total_debt: float = Field(..., description="Gross total debt (NOT net of cash), deducted in the EV->equity bridge")
     cash_and_equivalents: float = Field(..., description="Cash & equivalents added back in EV->equity bridge")
     investments: float = Field(0.0, description="Non-operating investments added in EV->equity bridge")
@@ -63,6 +87,8 @@ class DcfInput(BaseModel):
     diluted_shares_outstanding: float = Field(..., gt=0)
     exit_multiple: Optional[float] = Field(
         None,
+        gt=0,
+        le=1000,
         description=(
             "Optional explicit EV/EBITDA-style exit multiple applied to the terminal-year EBITDA "
             "(terminal-year EBIT + terminal-year D&A) to compute an independent Exit Multiple terminal "
@@ -128,6 +154,8 @@ class DcfResult(BaseModel):
 
 
 class CompPeer(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
     name: str
     revenue: float
     ebitda: float
@@ -162,6 +190,8 @@ class MultipleStats(BaseModel):
 
 
 class CompsInput(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
     peers: list[CompPeer] = Field(..., min_length=1, description="Already-assembled peer set (peer selection is out of scope for this module)")
     target_name: str
     target_revenue: float
@@ -240,6 +270,31 @@ class SotpResult(BaseModel):
 # --------------------------------------------------------------------------
 # Sensitivity
 # --------------------------------------------------------------------------
+
+
+# The scalar numeric DcfInput fields a sensitivity grid may vary, and the
+# always-populated scalar DcfResult fields it may read. Static Literals (not
+# derived at runtime) so the OpenAPI schema lists them; a test asserts the
+# input list matches DcfInput so the two cannot drift apart.
+DcfScalarField = Literal[
+    "base_revenue",
+    "tax_rate",
+    "wacc",
+    "terminal_growth_rate",
+    "total_debt",
+    "cash_and_equivalents",
+    "investments",
+    "minority_interest",
+    "diluted_shares_outstanding",
+    "exit_multiple",
+]
+DcfSensitivityOutput = Literal[
+    "enterprise_value",
+    "equity_value",
+    "implied_price_per_share",
+    "terminal_value_undiscounted",
+    "terminal_value_discounted",
+]
 
 
 class SensitivityInput(BaseModel):

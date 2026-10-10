@@ -129,26 +129,28 @@ def _value_from_dcf(segment: SegmentFacts, assumption: SegmentDcfAssumption) -> 
             f"(status={segment.revenue_status}); refusing to fabricate a base_revenue."
         )
 
-    dcf_input = DcfInput(
-        base_revenue=segment.revenue,
-        revenue_growth_rates=assumption.revenue_growth_rates,
-        ebit_margins=assumption.ebit_margins,
-        tax_rate=assumption.tax_rate,
-        da_pct_of_revenue=assumption.da_pct_of_revenue,
-        capex_pct_of_revenue=assumption.capex_pct_of_revenue,
-        nwc_change_pct_of_revenue=assumption.nwc_change_pct_of_revenue,
-        wacc=assumption.wacc,
-        terminal_growth_rate=assumption.terminal_growth_rate,
-        # Segment-level EV only: bridge fields are neutralized (0) since SOTP
-        # applies the company-level bridge once, upstream of this module.
-        total_debt=0.0,
-        cash_and_equivalents=0.0,
-        investments=0.0,
-        minority_interest=0.0,
-        diluted_shares_outstanding=1.0,
-        exit_multiple=assumption.exit_multiple,
-    )
+    # DcfInput enforces bounds (e.g. 0 <= tax_rate < 1); a bad assumption must come back
+    # as this segment's error, not an uncaught ValidationError (a 500 at the endpoint).
     try:
+        dcf_input = DcfInput(
+            base_revenue=segment.revenue,
+            revenue_growth_rates=assumption.revenue_growth_rates,
+            ebit_margins=assumption.ebit_margins,
+            tax_rate=assumption.tax_rate,
+            da_pct_of_revenue=assumption.da_pct_of_revenue,
+            capex_pct_of_revenue=assumption.capex_pct_of_revenue,
+            nwc_change_pct_of_revenue=assumption.nwc_change_pct_of_revenue,
+            wacc=assumption.wacc,
+            terminal_growth_rate=assumption.terminal_growth_rate,
+            # Segment-level EV only: bridge fields are neutralized (0) since SOTP
+            # applies the company-level bridge once, upstream of this module.
+            total_debt=0.0,
+            cash_and_equivalents=0.0,
+            investments=0.0,
+            minority_interest=0.0,
+            diluted_shares_outstanding=1.0,
+            exit_multiple=assumption.exit_multiple,
+        )
         dcf_input.validate_lengths()
     except ValueError as exc:
         return None, str(exc)

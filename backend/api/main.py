@@ -4,10 +4,15 @@ SOTP Intelligence FastAPI application entrypoint.
 Run with: uvicorn backend.api.main:app --reload
 """
 
+import math
 import os
+from typing import Any
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.api.deps import get_current_user
 from backend.api.routers import companies, filings, market_data, segments, valuation, scenarios, memo
@@ -28,6 +33,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _json_safe(value: Any) -> Any:
+    """Replace NaN/Infinity (which JSON cannot represent) with their string form."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Same 422 body FastAPI produces by default, except non-finite floats are
+    stringified. A validation error echoes the offending input back; for a body
+    like {"wacc": NaN} that input is a float JSON cannot encode, so the default
+    handler crashed while building the 422 and the client got a 500."""
+    return JSONResponse(status_code=422, content={"detail": _json_safe(jsonable_encoder(exc.errors()))})
 
 
 @app.get("/health", tags=["health"])

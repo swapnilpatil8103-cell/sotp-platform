@@ -21,8 +21,15 @@ default `{"detail": "..."}` shape unless noted.
   documented-but-deferred (never a silent stub returning fake data).
 - `503` = upstream (SEC EDGAR / market data provider) unavailable or rate
   limited; retry later. `404` = ticker/resource not found. `400` = bad
-  input / validation error. `422` = an AI task abstained and could not
-  produce a usable result.
+  input that is only discovered when the engine runs, or an unknown enum-like
+  value (e.g. an unknown `method`). `422` = the request failed schema
+  validation (FastAPI's standard `{"detail": [{loc, msg, type, ...}]}` shape,
+  with per-field detail) — this is also what an out-of-range value on a
+  constrained field gets — and is likewise used when an AI task abstained.
+  Valuation endpoints never answer `500` for bad input. Non-finite numbers
+  (`NaN`, `Infinity`) are not valid inputs; where one fails validation it is
+  echoed back in the `422` as the string `"nan"` / `"inf"`, because JSON
+  cannot carry the number itself.
 - Governance/valuation-run endpoints (`/valuation/assumptions/*`,
   `/valuation/run`, `/valuation/company/{id}/*`) require a `Session`
   (SQLite in tests, Postgres/Supabase via `DATABASE_URL` in real use).
@@ -281,14 +288,44 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
   price/share). Equity = EV − `total_debt` + `cash_and_equivalents` +
   `investments` − `minority_interest`. **Breaking change:** this field was
   previously `net_debt`; a body still sending it is rejected with `422`
-  (missing `total_debt`). `400` on invalid input
-  (e.g. mismatched schedule lengths — `DcfInput.validate_lengths()`).
+  (missing `total_debt`).
+  **Bounds** (each violation is a `422`): `0 <= tax_rate < 1`; `wacc > -1`;
+  every `revenue_growth_rates` entry in `(-1, 10]` (revenue cannot fall by
+  more than 100% a year); every `ebit_margins` entry in `[-5, 1]`;
+  `terminal_growth_rate` in `(-1, 1]`; `exit_multiple`, if given, in
+  `(0, 1000]`; `diluted_shares_outstanding > 0`; no `NaN`/`Infinity`.
+  `400` when the inputs pass validation but cannot be computed: mismatched
+  schedule lengths (`DcfInput.validate_lengths()`), `wacc <= terminal_growth_rate`,
+  an arithmetic failure (`ZeroDivisionError` / `OverflowError`, e.g. `wacc`
+  just above -1 over a long horizon so a discount factor underflows to zero,
+  or a very large `wacc`), or a result so large it is not finite.
+- **`POST /valuation/wacc`** — body: `WaccInput` (`risk_free_rate, beta,
+  equity_risk_premium, cost_of_debt_pretax, tax_rate, market_value_equity,
+  market_value_debt`) → `WaccResult`. The body is typed (it was previously an
+  untyped object), so a missing, mistyped or out-of-range field is a `422`
+  with per-field detail: `0 <= tax_rate < 1`, `market_value_equity > 0`,
+  `market_value_debt >= 0`, no `NaN`/`Infinity`.
 - **`POST /valuation/comps`** — body: `CompsInput` (peer set + multiples
-  basis) → `CompsResult`. `400` on invalid input.
+  basis) → `CompsResult`. A peer metric that is zero or negative (negative
+  EBITDA, EBIT, earnings or book value, or non-positive revenue) yields no
+  multiple (`null` in `peer_multiples`) and so never enters the min / 25th /
+  median / 75th / max statistics. `422` on schema violations (including
+  `NaN`/`Infinity`), `400` on e.g. a target with no value for the chosen
+  metric.
 - **`POST /valuation/sensitivity/dcf`** — body: `{base_dcf_input: dict,
   row_field, row_values, col_field, col_values, output_field}` → grid of
-  `output_field` (default `implied_price_per_share`) varying two DCF input
-  fields. `400` on invalid field names or types.
+  `output_field` varying two DCF input fields (one DCF run per cell).
+  `row_field` / `col_field` must be scalar numeric `DcfInput` fields
+  (`base_revenue`, `tax_rate`, `wacc`, `terminal_growth_rate`, `total_debt`,
+  `cash_and_equivalents`, `investments`, `minority_interest`,
+  `diluted_shares_outstanding`, `exit_multiple`) and must differ from each
+  other; `output_field` is one of `enterprise_value`, `equity_value`,
+  `implied_price_per_share` (default), `terminal_value_undiscounted`,
+  `terminal_value_discounted`. Each axis has 1–25 values (so at most 625
+  runs). Anything else is a `422`. `400` when a grid cell cannot be computed
+  — a value outside that field's bound (e.g. `wacc = -1` or `tax_rate = 1.5`
+  in the grid) or an incomplete `base_dcf_input`. An unknown axis or output
+  name used to be silently ignored or crash with a `500`.
 
 ### Ticker-driven endpoints (deferred)
 
@@ -350,8 +387,12 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
   required request field.
 - **`GET /valuation/company/{company_id}/runs?method=...`** →
   `list[ValuationRunOut]` (version history, optionally filtered by method).
+  `method` is `DCF`, `COMPS` or `SOTP`, case-insensitive; an unknown value is
+  a `400` listing the valid ones (it was previously an unhandled `500`).
+  Omitted or empty means no filter.
 - **`GET /valuation/company/{company_id}/runs/diff?from_version=&to_version=&method=`**
-  → `DiffResponse` (field-level diff between two run versions). `404` if
+  → `DiffResponse` (field-level diff between two run versions). Same `method`
+  rule: unknown → `400`, checked before the versions are looked up. `404` if
   either version not found.
 - **`GET /valuation/company/{company_id}/audit-trail`** →
   `list[AuditTrailEntryOut]`.

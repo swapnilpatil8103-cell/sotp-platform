@@ -27,7 +27,15 @@ _METRICS = ["ev_to_revenue", "ev_to_ebitda", "ev_to_ebit", "price_to_earnings", 
 
 
 def _safe_div(numerator: float, denominator: float) -> Optional[float]:
-    if denominator == 0:
+    """A valuation multiple is only meaningful over a positive denominator.
+
+    Negative EBITDA, EBIT or earnings (and negative book value) produce a
+    negative "multiple" that says nothing about price relative to earnings, and
+    would drag the min/median/percentiles of the peer set toward nonsense; zero
+    is undefined. Both return None, so the peer simply drops out of that
+    metric's statistics (``compute_multiple_stats`` ignores None).
+    """
+    if denominator <= 0:
         return None
     return numerator / denominator
 

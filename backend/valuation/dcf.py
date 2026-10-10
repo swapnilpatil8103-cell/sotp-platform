@@ -14,6 +14,8 @@ Equity value / diluted shares = implied price per share.
 
 from __future__ import annotations
 
+import math
+
 from backend.schemas.valuation import DcfInput, DcfResult, DcfYearProjection
 
 
@@ -71,6 +73,32 @@ def compute_exit_multiple_terminal_value(terminal_year_ebitda: float, exit_multi
 
 
 def run_dcf(inputs: DcfInput) -> DcfResult:
+    """Run the DCF. Raises ``ValueError`` for any input the model cannot
+    compute, including arithmetic failures (``ZeroDivisionError`` /
+    ``OverflowError``): every caller already maps ``ValueError`` to a 400, so
+    converting here fixes them all at once instead of each endpoint needing its
+    own ``except``. ``DcfInput`` bounds ``wacc > -1``, but a discount factor can
+    still underflow to zero (wacc just above -1 over a long horizon) or
+    overflow (a very large wacc), and the schema cannot rule those out.
+    """
+    try:
+        result = _run_dcf(inputs)
+    except ArithmeticError as exc:
+        raise ValueError(
+            f"DCF could not be computed for these inputs ({type(exc).__name__}: {exc}); "
+            "check that wacc is greater than -1 and not so extreme that discount factors "
+            "underflow or overflow over the forecast horizon."
+        ) from exc
+
+    # Float multiplication overflows to inf silently (only ** and / raise), which
+    # would otherwise be serialised as nulls on a 200.
+    for name in ("enterprise_value", "equity_value", "implied_price_per_share"):
+        if not math.isfinite(getattr(result, name)):
+            raise ValueError(f"DCF produced a non-finite {name}; the inputs are too large to compute.")
+    return result
+
+
+def _run_dcf(inputs: DcfInput) -> DcfResult:
     inputs.validate_lengths()
 
     n_years = len(inputs.revenue_growth_rates)

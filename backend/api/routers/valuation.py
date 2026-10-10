@@ -10,7 +10,7 @@ docs/implementation-plan.md Phase 5 section for what's deferred and why.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlmodel import Session
 
 from backend.api.deps import AuthenticatedUser, require_analyst
@@ -39,9 +39,13 @@ from backend.schemas.valuation import (
     CompsResult,
     DcfInput,
     DcfResult,
+    DcfScalarField,
+    DcfSensitivityOutput,
     SensitivityResult,
     SotpInput,
     SotpResult,
+    WaccInput,
+    WaccResult,
 )
 from backend.services.macro_data_client import MacroDataClient, MacroDataError
 from backend.valuation.beta_analysis import BetaAnalysisInput, BetaAnalysisResult, run_beta_analysis
@@ -54,6 +58,7 @@ from backend.valuation.segment_valuation import (
 )
 from backend.valuation.sensitivity import dcf_sensitivity
 from backend.valuation.sotp import run_sotp
+from backend.valuation.wacc import compute_wacc
 
 router = APIRouter(prefix="/valuation", tags=["valuation"])
 
@@ -97,13 +102,31 @@ def compute_comps(payload: CompsInput):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+# A grid re-runs the DCF once per cell, so each axis is capped (25 x 25 = 625 runs).
+MAX_SENSITIVITY_AXIS_VALUES = 25
+
+
 class DcfSensitivityRequestPayload(BaseModel):
+    """Axis and output names are restricted to real scalar fields: an unknown
+    name used to be silently ignored for an axis (a constant grid) and raised an
+    uncaught AttributeError for the output (a 500)."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
+
     base_dcf_input: dict
-    row_field: str
-    row_values: list[float]
-    col_field: str
-    col_values: list[float]
-    output_field: str = "implied_price_per_share"
+    row_field: DcfScalarField
+    row_values: list[float] = Field(..., min_length=1, max_length=MAX_SENSITIVITY_AXIS_VALUES)
+    col_field: DcfScalarField
+    col_values: list[float] = Field(..., min_length=1, max_length=MAX_SENSITIVITY_AXIS_VALUES)
+    output_field: DcfSensitivityOutput = "implied_price_per_share"
+
+    @model_validator(mode="after")
+    def _axes_must_differ(self) -> "DcfSensitivityRequestPayload":
+        # With the same field on both axes the column value overwrites the row
+        # value, so the grid would silently vary only one input.
+        if self.row_field == self.col_field:
+            raise ValueError("row_field and col_field must be different fields")
+        return self
 
 
 @router.post("/sensitivity/dcf", response_model=SensitivityResult)
@@ -190,20 +213,18 @@ def suggest_risk_free_rate(symbol: str = "US10Y"):
     }
 
 
-@router.post("/wacc", response_model=None)
-def compute_wacc_endpoint(payload: dict):
-    """Thin pass-through to backend.valuation.wacc.compute_wacc (previously
-    unwired). Kept schema-loose (dict) here since WaccInput/WaccResult are
-    already fully defined in backend/schemas/valuation.py; this just gives
-    the frontend WACC toggle (peer-informed beta pre-fill) a real endpoint to
-    submit reviewed/edited WACC inputs to, same pure-compute-no-persistence
-    convention as /valuation/sotp and /valuation/dcf.
-    """
-    from backend.schemas.valuation import WaccInput
-    from backend.valuation.wacc import compute_wacc
+@router.post("/wacc", response_model=WaccResult)
+def compute_wacc_endpoint(payload: WaccInput):
+    """Thin pass-through to backend.valuation.wacc.compute_wacc: a real endpoint
+    for submitting reviewed/edited WACC inputs (e.g. after pre-filling a
+    peer-informed beta), same pure-compute-no-persistence convention as
+    /valuation/sotp and /valuation/dcf.
 
+    The body is a typed `WaccInput`, so a malformed or out-of-range field (e.g.
+    a tax_rate outside [0, 1)) is a standard 422 with per-field detail.
+    """
     try:
-        return compute_wacc(WaccInput(**payload))
+        return compute_wacc(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -287,6 +308,16 @@ def list_assumptions(company_id: int, session: Session = Depends(get_session)):
     return approval.list_decisions_for_company(session, company_id)
 
 
+def _parse_method(raw: str) -> ValuationMethod:
+    """Case-insensitive ValuationMethod, or a 400 listing the valid values (a bare
+    ValueError from the enum constructor would surface as a 500)."""
+    try:
+        return ValuationMethod(raw.upper())
+    except ValueError as exc:
+        valid = ", ".join(m.value for m in ValuationMethod)
+        raise HTTPException(status_code=400, detail=f"Unknown method '{raw}'; expected one of: {valid}") from exc
+
+
 @router.post("/run", response_model=ValuationRunOut)
 def run_governed_valuation(
     payload: RunValuationRequest,
@@ -313,10 +344,7 @@ def run_governed_valuation(
       `backend/governance/run_computation.py::ASSUMPTION_FIELD_MAP`) differs
       from that input.
     """
-    try:
-        method = ValuationMethod(payload.method.upper())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Unknown method '{payload.method}'") from exc
+    method = _parse_method(payload.method)
 
     try:
         return execute_valuation_run(
@@ -334,7 +362,7 @@ def run_governed_valuation(
 
 @router.get("/company/{company_id}/runs", response_model=list[ValuationRunOut])
 def list_company_runs(company_id: int, method: str | None = None, session: Session = Depends(get_session)):
-    method_enum = ValuationMethod(method.upper()) if method else None
+    method_enum = _parse_method(method) if method else None
     return list_versions(session, company_id, method_enum)
 
 
@@ -346,7 +374,7 @@ def diff_company_runs(
     method: str | None = None,
     session: Session = Depends(get_session),
 ):
-    method_enum = ValuationMethod(method.upper()) if method else None
+    method_enum = _parse_method(method) if method else None
     run_a = get_version(session, company_id, from_version, method_enum)
     run_b = get_version(session, company_id, to_version, method_enum)
     if run_a is None or run_b is None:
