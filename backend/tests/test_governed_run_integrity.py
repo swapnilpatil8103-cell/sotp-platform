@@ -37,7 +37,7 @@ def _company(session, ticker="AAPL", cik10="0000320193"):
 def _approved(session, company_id, key, value, *, edit_to=None):
     """A decision a human APPROVED as-is, or EDITed to ``edit_to``."""
     decision = approval.propose(
-        session, company_id=company_id, assumption_key=key, ai_recommended_value=value, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company_id, assumption_key=key, ai_recommended_value=value, ai_rationale="x"
     )
     if edit_to is None:
         approval.record_decision(session, decision_id=decision.id, decision="APPROVE", user_id=ANALYST)
@@ -237,7 +237,7 @@ def test_unmapped_keys_pass_the_gate_and_are_recorded_as_unverified(session):
 def test_pending_decision_is_still_rejected(session):
     company = _company(session)
     pending = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
     )
 
     resp = _post_run(company.id, "DCF", [pending.id], dcf_inputs(wacc=0.09))
@@ -250,7 +250,7 @@ def test_pending_decision_is_still_rejected(session):
 def test_rejected_decision_is_still_rejected(session):
     company = _company(session)
     decision = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=decision.id, decision="REJECT", user_id=ANALYST)
 
@@ -276,7 +276,7 @@ def test_approval_error_takes_precedence_over_input_errors(session):
     """An unapproved run is refused before any input is even looked at."""
     company = _company(session)
     pending = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
     )
 
     resp = _post_run(company.id, "DCF", [pending.id], {"garbage": 1})

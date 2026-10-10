@@ -12,6 +12,11 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Written by migration e5f6a7b8c9d0 into rows that predate proposer tracking. It
+# means "nobody can say who proposed this", so such a proposal cannot be approved.
+LEGACY_PROPOSER = "unknown-legacy"
+
+
 class AssumptionDecision(SQLModel, table=True):
     """
     The central artifact of human-in-the-loop governance (see
@@ -53,8 +58,8 @@ class AssumptionDecision(SQLModel, table=True):
 
     # Who requested/recorded this proposal (token subject). The approver of the
     # decision may not be this same user (separation of duties, enforced in
-    # backend/governance/approval.py). NULL on rows created before the column
-    # existed; the rule cannot be applied to those.
+    # backend/governance/approval.py). Rows that predate the column hold
+    # LEGACY_PROPOSER (set by migration e5f6a7b8c9d0); those can only be rejected.
     proposed_by: Optional[str] = Field(default=None, max_length=256, description="User who recorded the proposal")
 
     decided_by: Optional[str] = Field(default=None, max_length=256, description="User identifier")

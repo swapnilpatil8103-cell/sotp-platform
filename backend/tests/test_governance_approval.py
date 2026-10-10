@@ -12,6 +12,7 @@ from backend.models.enums import AssumptionStatus
 def _propose(session, company_id):
     return approval.propose(
         session,
+        proposed_by="proposer@firm.com",
         company_id=company_id,
         assumption_key="wacc",
         ai_recommended_value=0.09,
@@ -105,6 +106,7 @@ def test_list_pending_and_all_for_company(session):
     d1 = _propose(session, company.id)
     d2 = approval.propose(
         session,
+        proposed_by="proposer@firm.com",
         company_id=company.id,
         assumption_key="terminal_growth_rate",
         ai_recommended_value=0.025,

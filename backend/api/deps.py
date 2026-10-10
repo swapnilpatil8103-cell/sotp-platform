@@ -12,12 +12,20 @@ Every router except ``/health`` is mounted with ``get_current_user`` (see
   ``ValuationRun.created_by`` and the ``human:<sub>`` audit-log actor. No
   request body can supply an identity.
 - ``exp``   -- expiry; tokens without one are rejected.
-- ``roles`` -- optional list of strings. ``require_role("analyst")`` gates the
-  endpoints that record a human decision or execute a governed run.
+- ``roles`` -- informational only. The token proves WHO the caller is; the
+  ``app_user`` row decides whether they may still act and with which roles.
 
-Failure modes: no/invalid/expired token -> 401; valid token without the
-required role -> 403; ``AUTH_JWT_SECRET`` unset or too short -> 503 (the
-server fails closed; it never falls back to letting requests through).
+After verifying the signature and expiry, ``get_current_user`` loads the user
+by email on EVERY request (nothing is cached): a token whose user was deleted or
+deactivated is rejected with 401, and roles come from the row, so a demotion
+(or promotion) takes effect on the very next request.
+``require_role("analyst")`` gates the endpoints that record a human decision
+or execute a governed run.
+
+Failure modes: no/invalid/expired token, or a valid token for a user that no
+longer exists / is inactive -> 401; an active user without the required role ->
+403; ``AUTH_JWT_SECRET`` unset or too short -> 503 (the server fails closed; it
+never falls back to letting requests through).
 
 Tokens for real users are issued by ``POST /auth/login``
 (``backend/api/routers/auth.py``). ``create_access_token`` is shared by that route,
@@ -35,6 +43,11 @@ from typing import Callable, Iterable, Optional
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlmodel import Session, select
+
+from backend.db import get_session
+from backend.models.app_user import AppUser
+from backend.services.users import normalize_email, parse_roles
 
 from backend.services.market_data_client import MarketDataClient
 from backend.services.sec_client import SECConnector
@@ -121,8 +134,10 @@ def _unauthorized(detail: str) -> HTTPException:
 
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+    session: Session = Depends(get_session),
 ) -> AuthenticatedUser:
-    """Authenticate the request from its Bearer token, or raise 401/503."""
+    """Authenticate the request from its Bearer token and the user's current
+    database row, or raise 401/503."""
     if credentials is None:
         raise _unauthorized("Not authenticated: send an 'Authorization: Bearer <token>' header.")
 
@@ -151,11 +166,15 @@ def get_current_user(
     if not isinstance(subject, str) or not subject.strip() or len(subject) > MAX_SUBJECT_LENGTH:
         raise _unauthorized("Invalid token.")
 
-    roles = claims.get("roles", [])
-    if not isinstance(roles, list) or not all(isinstance(r, str) for r in roles):
-        raise _unauthorized("Invalid token.")
+    # The signature proves the token was issued by us, not that the account is
+    # still valid. Look the user up on every request (no cache) so deleting or
+    # deactivating an account, or changing its roles, takes effect immediately.
+    # Roles in the token are ignored.
+    row = session.exec(select(AppUser).where(AppUser.email == normalize_email(subject))).first()
+    if row is None or not row.is_active:
+        raise _unauthorized("Account is no longer active.")
 
-    return AuthenticatedUser(subject=subject, roles=frozenset(roles))
+    return AuthenticatedUser(subject=row.email, roles=frozenset(parse_roles(row.roles)))
 
 
 def require_role(role: str) -> Callable[[AuthenticatedUser], AuthenticatedUser]:

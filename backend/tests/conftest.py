@@ -15,7 +15,7 @@ from typing import Iterator
 
 import pytest
 
-from backend.tests.fixtures.auth import TEST_JWT_SECRET
+from backend.tests.fixtures.auth import TEST_JWT_SECRET, seed_test_roster
 
 # Set at import time (not in a fixture) because test modules mint tokens at
 # module level, which happens during collection, before any fixture runs.
@@ -28,11 +28,18 @@ os.environ["AUTH_JWT_SECRET"] = TEST_JWT_SECRET
 def _test_database(monkeypatch, tmp_path) -> Iterator[None]:
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    # Same dummy value CI uses; keeps tests that build the SEC client independent
+    # of the developer's shell. Tests of the missing-variable path delenv it.
+    monkeypatch.setenv("SEC_USER_AGENT", "Test Suite test@example.com")
 
     from backend import db as db_module
 
     db_module.reset_engine()
     db_module.create_all()
+    from sqlmodel import Session
+
+    with Session(db_module.get_engine()) as seed_session:
+        seed_test_roster(seed_session)
 
     yield
 

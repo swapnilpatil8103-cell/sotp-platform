@@ -1,9 +1,11 @@
 """Authentication (401), role authorization (403) and token-derived identity.
 
-Covers: every route except /health rejects an unauthenticated request; bad
-tokens are rejected; the "analyst" role gates the decide and run endpoints;
-and the approver / run author / audit-log actor come from the token subject,
-never from the request body.
+Covers: every route except /health and /auth/login rejects an unauthenticated
+request; bad tokens are rejected; the "analyst" role gates the decide and run
+endpoints; the approver / run author / audit-log actor come from the token
+subject, never from the request body; and the user row is loaded on every
+request, so deactivating or deleting a user, or changing their roles, takes
+effect immediately even though their token is still validly signed.
 """
 
 from __future__ import annotations
@@ -126,8 +128,6 @@ def test_every_route_except_health_requires_a_token(method, path):
         (_forge(_valid_claims(sub=None)), "no sub claim"),
         (_forge(_valid_claims(sub="   ")), "blank sub"),
         (_forge(_valid_claims(sub="x" * (MAX_SUBJECT_LENGTH + 1))), "sub longer than the DB columns"),
-        (_forge(_valid_claims(roles="analyst")), "roles is a string, not a list"),
-        (_forge(_valid_claims(roles=["analyst", 7])), "roles contains a non-string"),
         (_bearer(jwt.encode(_valid_claims(), None, algorithm="none")), "unsigned token (alg=none)"),
     ],
     ids=lambda v: v if isinstance(v, str) else None,
@@ -135,6 +135,12 @@ def test_every_route_except_health_requires_a_token(method, path):
 def test_invalid_tokens_are_rejected_with_401(headers, label):
     resp = anon.get(READ_URL, headers=headers)
     assert resp.status_code == 401, label
+
+
+def test_a_valid_token_for_an_unknown_user_is_rejected():
+    resp = anon.get(READ_URL, headers=_forge(_valid_claims(sub="ghost@firm.com")))
+    assert resp.status_code == 401
+    assert "no longer active" in resp.json()["detail"]
 
 
 def test_expired_token_says_so():
@@ -158,7 +164,9 @@ RUN_BODY = {"company_id": 1, "method": "DCF", "decision_ids": [1], "inputs": {}}
 NON_ANALYST = [
     pytest.param(auth_headers("viewer@firm.com", roles=()), id="no-roles"),
     pytest.param(auth_headers("viewer@firm.com", roles=("viewer",)), id="other-role"),
-    pytest.param(_forge(_valid_claims(roles=None)), id="no-roles-claim"),
+    pytest.param(_forge(_valid_claims(sub="viewer@firm.com", roles=None)), id="no-roles-claim"),
+    # The token CLAIMS analyst, but the user row (the authority) has no roles.
+    pytest.param(_forge(_valid_claims(sub="viewer@firm.com", roles=["analyst"])), id="token-claims-analyst-db-says-no"),
 ]
 
 
@@ -179,7 +187,7 @@ def test_run_requires_the_analyst_role(headers):
 def test_a_forbidden_decide_changes_nothing(session):
     company = get_or_create_company(session, ticker="AAPL", cik10="0000320193", name="Apple Inc.")
     pending = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
     )
 
     resp = anon.post(
@@ -206,7 +214,7 @@ def test_an_analyst_gets_past_the_role_check():
 def _pending(session, key="wacc", value=0.09):
     company = get_or_create_company(session, ticker="AAPL", cik10="0000320193", name="Apple Inc.")
     return company, approval.propose(
-        session, company_id=company.id, assumption_key=key, ai_recommended_value=value, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key=key, ai_recommended_value=value, ai_rationale="x"
     )
 
 
@@ -354,3 +362,114 @@ def test_token_round_trip_carries_subject_roles_and_expiry():
     assert claims["sub"] == "alice@firm.com"
     assert claims["roles"] == ["analyst", "auditor"]
     assert 0 < claims["exp"] - datetime.now(timezone.utc).timestamp() <= 300
+
+
+# --------------------------------------------------------------------------
+# The user row is authoritative on every request (nothing is cached)
+# --------------------------------------------------------------------------
+
+
+def _set_user(session, email: str, **changes):
+    from sqlmodel import select
+
+    from backend.models.app_user import AppUser
+
+    row = session.exec(select(AppUser).where(AppUser.email == email)).one()
+    for key, value in changes.items():
+        setattr(row, key, value)
+    session.add(row)
+    session.commit()
+    return row
+
+
+def test_deactivated_users_valid_token_is_rejected_at_once(session):
+    headers = auth_headers("alice@firm.com")
+    assert anon.get(READ_URL, headers=headers).status_code == 200
+
+    _set_user(session, "alice@firm.com", is_active=False)
+
+    resp = anon.get(READ_URL, headers=headers)  # same, still-unexpired token
+    assert resp.status_code == 401
+    assert resp.headers["www-authenticate"] == "Bearer"
+    assert "no longer active" in resp.json()["detail"]
+
+
+def test_reactivating_a_user_restores_access_with_the_same_token(session):
+    headers = auth_headers("alice@firm.com")
+    _set_user(session, "alice@firm.com", is_active=False)
+    assert anon.get(READ_URL, headers=headers).status_code == 401
+
+    _set_user(session, "alice@firm.com", is_active=True)
+
+    assert anon.get(READ_URL, headers=headers).status_code == 200
+
+
+def test_deleted_users_valid_token_is_rejected(session):
+    from sqlmodel import select
+
+    from backend.models.app_user import AppUser
+
+    headers = auth_headers("bob@firm.com")
+    session.delete(session.exec(select(AppUser).where(AppUser.email == "bob@firm.com")).one())
+    session.commit()
+
+    assert anon.get(READ_URL, headers=headers).status_code == 401
+
+
+def test_role_removed_in_the_db_takes_effect_on_the_next_request(session):
+    # Minted while alice is an analyst, so the token itself says "analyst".
+    headers = auth_headers("alice@firm.com", roles=("analyst",))
+    assert anon.post(DECIDE_URL, json=DECIDE_BODY, headers=headers).status_code == 400  # past the role gate
+
+    _set_user(session, "alice@firm.com", roles="")
+
+    resp = anon.post(DECIDE_URL, json=DECIDE_BODY, headers=headers)
+    assert resp.status_code == 403
+    assert "analyst" in resp.json()["detail"]
+    assert anon.post("/valuation/run", json=RUN_BODY, headers=headers).status_code == 403
+    assert anon.get(READ_URL, headers=headers).status_code == 200  # still signed in, just demoted
+
+
+def test_role_granted_in_the_db_works_with_a_token_that_has_no_roles(session):
+    headers = _forge(_valid_claims(sub="viewer@firm.com", roles=None))
+    assert anon.post(DECIDE_URL, json=DECIDE_BODY, headers=headers).status_code == 403
+
+    _set_user(session, "viewer@firm.com", roles="analyst")
+
+    assert anon.post(DECIDE_URL, json=DECIDE_BODY, headers=headers).status_code == 400  # past the role gate
+
+
+def test_junk_roles_claim_is_ignored_because_the_db_decides():
+    headers = _forge(_valid_claims(roles="analyst"))  # a string, not a list: previously a 401
+    assert anon.get(READ_URL, headers=headers).status_code == 200
+
+
+def test_subject_is_matched_case_insensitively_and_recorded_canonically(session):
+    company = get_or_create_company(session, ticker="AAPL", cik10="0000320193", name="Apple Inc.")
+    pending = approval.propose(
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc",
+        ai_recommended_value=0.09, ai_rationale="x",
+    )
+
+    resp = anon.post(
+        f"/valuation/assumptions/{pending.id}/decide", json=DECIDE_BODY, headers=_forge(_valid_claims(sub="ALICE@Firm.com"))
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["decided_by"] == "alice@firm.com"  # the row's email, not the token's spelling
+
+
+def test_a_deactivated_user_cannot_use_a_blocked_decide_either(session):
+    company = get_or_create_company(session, ticker="AAPL", cik10="0000320193", name="Apple Inc.")
+    pending = approval.propose(
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc",
+        ai_recommended_value=0.09, ai_rationale="x",
+    )
+    headers = auth_headers("alice@firm.com")
+    _set_user(session, "alice@firm.com", is_active=False)
+
+    resp = anon.post(f"/valuation/assumptions/{pending.id}/decide", json=DECIDE_BODY, headers=headers)
+
+    assert resp.status_code == 401
+    session.refresh(pending)
+    assert pending.status == AssumptionStatus.PENDING

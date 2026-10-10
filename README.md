@@ -41,7 +41,7 @@ backend/            FastAPI backend (api, models, services, valuation, ai, gover
 packages/shared-types/  TypeScript types shared across frontend (and future services)
 data/cache/         Local cache for SEC/market data responses (gitignored contents)
 docs/               Architecture, data model, valuation methodology, AI governance, API docs
-scripts/            Dev scripts (`create_user.py` adds a login, `mint_dev_token.py` mints a JWT for scripts)
+scripts/            Dev scripts (`create_user.py` adds a login, `mint_dev_token.py` mints a JWT for an existing user)
 ```
 
 ## Running locally
@@ -66,18 +66,19 @@ API or the test suite can make any SEC EDGAR request — without it,
 
 ### Authentication
 
-Every endpoint **except `GET /health`** requires `Authorization: Bearer <JWT>`
-(tokens are HS256-signed). Without a valid token the API answers `401`; with a
-valid token that lacks the `analyst` role, the two endpoints that record a
-human decision or execute a governed run
+Every endpoint **except `GET /health` and `POST /auth/login`** requires
+`Authorization: Bearer <JWT>` (tokens are HS256-signed). Without a valid token
+the API answers `401`; for an active user without the `analyst` role, the two
+endpoints that record a human decision or execute a governed run
 (`POST /valuation/assumptions/{id}/decide`, `POST /valuation/run`) answer
 `403`. All other endpoints are open to any authenticated user.
 
-**Who did it comes from the token, never the request body.** The token's `sub`
-claim is recorded as `AssumptionDecision.decided_by`, `ValuationRun.created_by`
-and the `human:<sub>` actor in the audit log. The request bodies no longer have
-`user_id` / `created_by` fields (sending one is a `422`), so a caller cannot
-approve or run "as" someone else.
+**The user row is checked on every request.** A valid signature only proves the
+token was issued by this server. After verifying it, the API loads the user from
+`app_user` by email (nothing is cached) and takes the **roles from that row, not
+from the token**. So a user who is deactivated or deleted gets `401` on their very
+next request even though their token has not expired, and removing the
+`analyst` role turns the next decide/run call into a `403` straight away.
 
 Signing in (web app and API):
 
@@ -111,8 +112,9 @@ call `/api/backend/*`, a proxy route that reads the cookie and adds the
 scripts cannot read it. `proxy.ts` sends signed-out visitors to `/login`, and
 state-changing proxy calls are refused if their `Origin` is not the app's own.
 The server-side `API_BASE_URL` (default `http://localhost:8000`) says where the
-Next.js server reaches the backend. `scripts/mint_dev_token.py` still mints a
-token for scripts and `curl`.
+Next.js server reaches the backend. `scripts/mint_dev_token.py --sub <email>`
+mints a token for scripts and `curl`, but only for a user who already exists and
+is active (the API would reject any other subject).
 
 **Who did it comes from the token, never the request body.** The token's `sub`
 (the user's email) is recorded as `AssumptionDecision.decided_by`,
@@ -121,20 +123,23 @@ request bodies have no `user_id` / `created_by` fields (sending one is a
 `422`), so a caller cannot approve or run "as" someone else.
 
 **Separation of duties.** `POST /valuation/assumptions/propose` records the
-caller as `proposed_by`. That same user (compared case-insensitively) gets a
-`403` if they try to approve, edit or reject the proposal; a different
-`analyst` must decide it. Proposals created before this column existed have no
-recorded proposer and are not covered. With the `analyst` role gate, decide and
-run answer `403` to a user without that role; every other endpoint is open to
-any signed-in user.
+caller as `proposed_by` (so does `POST /scenarios/value-unlock/propose`;
+`approval.propose()` requires it). That same user (compared case-insensitively)
+gets a `403` if they try to approve, edit or reject the proposal; a different
+`analyst` must decide it.
+
+Proposals that predate this tracking were marked `proposed_by = "unknown-legacy"`
+by migration `e5f6a7b8c9d0`. Because nobody can say who proposed them, they
+cannot be approved or edited: `decide` answers `400` telling the caller to
+re-propose. They can still be rejected, which clears them out.
 
 If `AUTH_JWT_SECRET` is unset or shorter than 32 characters, every protected
 endpoint (and login) answers `503`: the server fails closed.
 
-**Not built yet:** token refresh and revocation (disabling a user takes effect
-when their token expires, at most an hour later), password reset or a user-admin
-page, a rate limiter shared across instances, MFA/SSO. The interactive docs
-(`/docs`, `/openapi.json`) remain open.
+**Not built yet:** token refresh, password reset or a user-admin page, a rate
+limiter shared across instances, MFA/SSO. (Revoking access needs no extra
+machinery: deactivate the user, see above.) The interactive docs (`/docs`,
+`/openapi.json`) remain open, and each request costs one indexed user lookup.
 
 ### Database (Postgres/Supabase) + migrations
 
@@ -262,11 +267,11 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
 
 ## Status
 
-All 10 phases complete as scoped. Backend: 563 unit/router tests +
-12 integration tests (real SEC EDGAR calls, `-m integration`), 575 in total, all passing.
+All 10 phases complete as scoped. Backend: 585 unit/router tests +
+12 integration tests (real SEC EDGAR calls, `-m integration`), 597 in total, all passing.
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
-is PARTIAL: login and sessions built; no token revocation or password reset). CI and containers are in place (see "CI and containers" below; item 40 is
+is PARTIAL: login, sessions and live user checks built; no password reset or SSO). CI and containers are in place (see "CI and containers" below; item 40 is
 PARTIAL: unverified on GitHub/Docker, no CD) — see
 `docs/definition-of-done.md` for the itemized final status of every
 Definition-of-Done requirement, including what's PARTIAL or NOT DONE.

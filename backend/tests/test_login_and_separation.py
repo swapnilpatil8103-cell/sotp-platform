@@ -34,7 +34,7 @@ def _login(email: str, password: str):
 
 @pytest.fixture()
 def analyst(session):
-    return users.create_user(session, "Alice@Firm.com", PASSWORD, [ROLE_ANALYST])
+    return users.create_user(session, "Login.Alice@Example.com", PASSWORD, [ROLE_ANALYST])
 
 
 # --------------------------------------------------------------------------
@@ -43,7 +43,7 @@ def analyst(session):
 
 
 def test_password_is_stored_as_an_argon2id_hash_never_plaintext(session, analyst):
-    row = session.exec(select(AppUser)).one()
+    row = session.exec(select(AppUser).where(AppUser.email == "login.alice@example.com")).one()
     assert row.password_hash.startswith("$argon2id$")
     assert PASSWORD not in row.password_hash
     assert users.verify_password(PASSWORD, row.password_hash)
@@ -57,7 +57,7 @@ def test_same_password_gets_a_different_salted_hash(session):
 
 
 def test_email_is_normalised_and_unique(session, analyst):
-    assert analyst.email == "alice@firm.com"
+    assert analyst.email == "login.alice@example.com"
     with pytest.raises(users.UserError):
         users.create_user(session, " ALICE@firm.com ", PASSWORD)
 
@@ -79,24 +79,24 @@ def test_garbage_hash_never_verifies():
 
 
 def test_login_returns_a_short_lived_token_with_subject_and_roles(analyst):
-    resp = _login("alice@firm.com", PASSWORD)
+    resp = _login("login.alice@example.com", PASSWORD)
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["token_type"] == "bearer"
-    assert body["subject"] == "alice@firm.com" and body["roles"] == ["analyst"]
+    assert body["subject"] == "login.alice@example.com" and body["roles"] == ["analyst"]
     claims = jwt.decode(body["access_token"], TEST_JWT_SECRET, algorithms=["HS256"])
-    assert claims["sub"] == "alice@firm.com" and claims["roles"] == ["analyst"]
+    assert claims["sub"] == "login.alice@example.com" and claims["roles"] == ["analyst"]
     assert claims["exp"] - claims["iat"] == body["expires_in"] == 3600
     assert "password" not in resp.text
 
 
 def test_login_is_case_insensitive_on_email(analyst):
-    assert _login("ALICE@FIRM.COM", PASSWORD).status_code == 200
+    assert _login("LOGIN.ALICE@EXAMPLE.COM", PASSWORD).status_code == 200
 
 
 def test_login_token_works_on_protected_routes_and_role_gate(session, analyst):
-    token = _login("alice@firm.com", PASSWORD).json()["access_token"]
+    token = _login("login.alice@example.com", PASSWORD).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     assert client.get("/valuation/company/1/assumptions", headers=headers).status_code == 200
@@ -105,8 +105,8 @@ def test_login_token_works_on_protected_routes_and_role_gate(session, analyst):
 
 
 def test_user_without_roles_gets_a_token_that_cannot_decide(session):
-    users.create_user(session, "viewer@firm.com", PASSWORD)
-    token = _login("viewer@firm.com", PASSWORD).json()["access_token"]
+    users.create_user(session, "login.viewer@example.com", PASSWORD)
+    token = _login("login.viewer@example.com", PASSWORD).json()["access_token"]
 
     resp = client.post(
         "/valuation/assumptions/1/decide", json={"decision": "APPROVE"}, headers={"Authorization": f"Bearer {token}"}
@@ -116,7 +116,7 @@ def test_user_without_roles_gets_a_token_that_cannot_decide(session):
 
 @pytest.mark.parametrize(
     "email, password",
-    [("alice@firm.com", "wrong password here"), ("nobody@firm.com", PASSWORD)],
+    [("login.alice@example.com", "wrong password here"), ("nobody@example.com", PASSWORD)],
     ids=["wrong-password", "unknown-user"],
 )
 def test_bad_credentials_get_the_same_generic_401(analyst, email, password):
@@ -131,15 +131,15 @@ def test_inactive_user_cannot_log_in_and_looks_like_a_bad_password(session, anal
     session.add(analyst)
     session.commit()
 
-    resp = _login("alice@firm.com", PASSWORD)
+    resp = _login("login.alice@example.com", PASSWORD)
     assert resp.status_code == 401 and resp.json() == {"detail": "Invalid email or password."}
 
 
 def test_repeated_failures_are_throttled_and_even_the_right_password_waits(analyst):
     for _ in range(users.MAX_FAILURES):
-        assert _login("alice@firm.com", "wrong password here").status_code == 401
+        assert _login("login.alice@example.com", "wrong password here").status_code == 401
 
-    resp = _login("alice@firm.com", PASSWORD)
+    resp = _login("login.alice@example.com", PASSWORD)
 
     assert resp.status_code == 429
     assert int(resp.headers["retry-after"]) > 0
@@ -147,15 +147,15 @@ def test_repeated_failures_are_throttled_and_even_the_right_password_waits(analy
 
 def test_success_resets_the_failure_counter(analyst):
     for _ in range(users.MAX_FAILURES - 1):
-        _login("alice@firm.com", "wrong password here")
-    assert _login("alice@firm.com", PASSWORD).status_code == 200
+        _login("login.alice@example.com", "wrong password here")
+    assert _login("login.alice@example.com", PASSWORD).status_code == 200
     for _ in range(users.MAX_FAILURES - 1):
-        assert _login("alice@firm.com", "wrong password here").status_code == 401
+        assert _login("login.alice@example.com", "wrong password here").status_code == 401
 
 
 def test_login_records_last_login(session, analyst):
     assert analyst.last_login_at is None
-    _login("alice@firm.com", PASSWORD)
+    _login("login.alice@example.com", PASSWORD)
     session.refresh(analyst)
     assert analyst.last_login_at is not None
 
@@ -171,16 +171,16 @@ def test_malformed_login_bodies_are_422(body):
 
 def test_login_fails_closed_without_a_signing_secret(analyst, monkeypatch):
     monkeypatch.delenv("AUTH_JWT_SECRET")
-    assert _login("alice@firm.com", PASSWORD).status_code == 503
+    assert _login("login.alice@example.com", PASSWORD).status_code == 503
 
 
 def test_token_lifetime_is_configurable_and_clamped(analyst, monkeypatch):
     monkeypatch.setenv("AUTH_TOKEN_MINUTES", "5")
-    assert _login("alice@firm.com", PASSWORD).json()["expires_in"] == 300
+    assert _login("login.alice@example.com", PASSWORD).json()["expires_in"] == 300
     monkeypatch.setenv("AUTH_TOKEN_MINUTES", "999999")
-    assert _login("alice@firm.com", PASSWORD).json()["expires_in"] == 24 * 3600
+    assert _login("login.alice@example.com", PASSWORD).json()["expires_in"] == 24 * 3600
     monkeypatch.setenv("AUTH_TOKEN_MINUTES", "junk")
-    assert _login("alice@firm.com", PASSWORD).json()["expires_in"] == 3600
+    assert _login("login.alice@example.com", PASSWORD).json()["expires_in"] == 3600
 
 
 # --------------------------------------------------------------------------
@@ -254,19 +254,11 @@ def test_a_blocked_attempt_does_not_burn_the_proposal(session, company_id):
     assert _decide(proposal["id"], bob, "EDIT", human_value=0.025).status_code == 200
 
 
-def test_proposals_without_a_recorded_proposer_are_not_blocked(session, company_id):
-    legacy = approval.propose(
-        session, company_id=company_id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
-    )
-    assert legacy.proposed_by is None
-    assert _decide(legacy.id, auth_headers("alice@firm.com")).status_code == 200
-
-
 def test_login_flow_end_to_end_enforces_separation(session, company_id):
-    users.create_user(session, "alice@firm.com", PASSWORD, [ROLE_ANALYST])
-    users.create_user(session, "bob@firm.com", PASSWORD, [ROLE_ANALYST])
-    alice = {"Authorization": "Bearer " + _login("alice@firm.com", PASSWORD).json()["access_token"]}
-    bob = {"Authorization": "Bearer " + _login("bob@firm.com", PASSWORD).json()["access_token"]}
+    users.create_user(session, "carol@example.com", PASSWORD, [ROLE_ANALYST])
+    users.create_user(session, "dave@example.com", PASSWORD, [ROLE_ANALYST])
+    alice = {"Authorization": "Bearer " + _login("carol@example.com", PASSWORD).json()["access_token"]}
+    bob = {"Authorization": "Bearer " + _login("dave@example.com", PASSWORD).json()["access_token"]}
 
     proposal = _propose_via_api(alice, company_id)
 

@@ -31,6 +31,7 @@ def test_running_with_pending_assumption_is_rejected(session):
     company = _company(session)
     decision = approval.propose(
         session,
+        proposed_by="proposer@firm.com",
         company_id=company.id,
         assumption_key="wacc",
         ai_recommended_value=0.09,
@@ -53,7 +54,7 @@ def test_running_with_pending_assumption_is_rejected(session):
 def test_running_with_rejected_assumption_is_rejected(session):
     company = _company(session)
     decision = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=decision.id, decision="REJECT", user_id="analyst@firm.com")
 
@@ -72,7 +73,7 @@ def test_running_with_rejected_assumption_is_rejected(session):
 def test_approved_assumption_allows_run_and_versions_increment(session):
     company = _company(session)
     d1 = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=d1.id, decision="APPROVE", user_id="analyst@firm.com")
 
@@ -87,7 +88,7 @@ def test_approved_assumption_allows_run_and_versions_increment(session):
     assert run1.version == 1
 
     d2 = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.10, ai_rationale="y"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.10, ai_rationale="y"
     )
     approval.record_decision(
         session, decision_id=d2.id, decision="EDIT", user_id="analyst@firm.com", human_value=0.11, reason="bumped"
@@ -115,7 +116,7 @@ def test_assemble_approved_assumptions_rejects_wrong_company(session):
     company_b = _company(session, ticker="MSFT", cik10="0000789019")
 
     d1 = approval.propose(
-        session, company_id=company_a.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company_a.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=d1.id, decision="APPROVE", user_id="a@b.com")
 
@@ -126,7 +127,7 @@ def test_assemble_approved_assumptions_rejects_wrong_company(session):
 def test_diff_runs_identifies_changed_and_unchanged_fields(session):
     company = _company(session)
     d1 = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=d1.id, decision="APPROVE", user_id="a@b.com")
 
@@ -140,7 +141,7 @@ def test_diff_runs_identifies_changed_and_unchanged_fields(session):
     )
 
     d2 = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.10, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.10, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=d2.id, decision="APPROVE", user_id="a@b.com")
     run2 = execute_valuation_run(
@@ -175,7 +176,7 @@ def test_diff_runs_identifies_changed_and_unchanged_fields(session):
 def test_diff_runs_no_differences(session):
     company = _company(session)
     d1 = approval.propose(
-        session, company_id=company.id, assumption_key="peer_multiple", ai_recommended_value=11.0, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="peer_multiple", ai_recommended_value=11.0, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=d1.id, decision="APPROVE", user_id="a@b.com")
     run1 = execute_valuation_run(
@@ -187,7 +188,7 @@ def test_diff_runs_no_differences(session):
         created_by="a@b.com",
     )
     d2 = approval.propose(
-        session, company_id=company.id, assumption_key="peer_multiple", ai_recommended_value=11.0, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="peer_multiple", ai_recommended_value=11.0, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=d2.id, decision="APPROVE", user_id="a@b.com")
     run2 = execute_valuation_run(

@@ -29,12 +29,16 @@ from backend.audit.logger import (
     actor_human,
     log_event,
 )
-from backend.models.assumption_decision import AssumptionDecision
+from backend.models.assumption_decision import LEGACY_PROPOSER, AssumptionDecision
 from backend.models.enums import AssumptionStatus
 
 
 class GovernanceError(ValueError):
     """Raised for invalid governance operations (e.g. deciding twice)."""
+
+
+class MissingProposerError(GovernanceError):
+    """The proposal has no recorded proposer, so separation of duties cannot be checked."""
 
 
 class SeparationOfDutiesError(GovernanceError):
@@ -50,14 +54,20 @@ def propose(
     ai_rationale: str,
     ai_confidence: Optional[float] = None,
     subject: Optional[str] = None,
-    proposed_by: Optional[str] = None,
+    proposed_by: str,
 ) -> AssumptionDecision:
     """Create a PENDING AssumptionDecision from an AI task's output.
 
     Not attached to any ValuationRun yet -- that only happens once the run
     that actually consumes it is executed (see valuation_run.py). Logs an
     AI_PROPOSAL_GENERATED audit event with actor="ai".
+
+    ``proposed_by`` (the authenticated user who requested the proposal) is
+    required: every proposal must be attributable, or it could never be checked
+    against its approver.
     """
+    if not proposed_by or not proposed_by.strip() or proposed_by == LEGACY_PROPOSER:
+        raise GovernanceError("proposed_by must identify the user recording the proposal.")
     decision = AssumptionDecision(
         company_id=company_id,
         assumption_key=assumption_key,
@@ -114,8 +124,11 @@ def record_decision(
 
     Separation of duties: the approver may not be the user who recorded the
     proposal (``proposed_by``, compared case-insensitively); that raises
-    ``SeparationOfDutiesError``. Proposals with no recorded proposer (created
-    before the column existed) cannot be checked and are not blocked.
+    ``SeparationOfDutiesError``. A proposal with no recorded proposer (NULL, or
+    the ``LEGACY_PROPOSER`` sentinel the migration put on pre-existing rows)
+    cannot be checked, so APPROVE and EDIT raise ``MissingProposerError`` telling
+    the caller to re-propose; REJECT is still allowed (it makes no value
+    available downstream) so such rows can be cleared.
 
     Raises GovernanceError if the decision has already been decided (no
     re-deciding a row -- create a new proposal instead) or for an unknown
@@ -130,12 +143,19 @@ def record_decision(
             "create a new proposal instead of re-deciding."
         )
 
-    if row.proposed_by and row.proposed_by.casefold() == user_id.casefold():
+    decision_upper = decision.upper()
+    if not row.proposed_by or row.proposed_by == LEGACY_PROPOSER:
+        if decision_upper in ("APPROVE", "EDIT"):
+            raise MissingProposerError(
+                f"AssumptionDecision {decision_id} has no recorded proposer, so separation of duties "
+                "cannot be verified. Re-propose the assumption (POST /valuation/assumptions/propose) and "
+                "decide the new proposal; the old one can only be rejected."
+            )
+    elif row.proposed_by.casefold() == user_id.casefold():
         raise SeparationOfDutiesError(
             "Separation of duties: you proposed this assumption, so a different user must decide it."
         )
 
-    decision_upper = decision.upper()
     if decision_upper == "APPROVE":
         row.status = AssumptionStatus.APPROVED
         row.approved_value = row.ai_recommended_value

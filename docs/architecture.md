@@ -297,8 +297,9 @@ no-paid-dependency principle.
   were consciously descoped from the 10 phases actually executed.
   Authentication was added afterwards (JWT Bearer on every router except
   `/health`, an `analyst` role for decide/run, identity from the token) but
-  has a login endpoint and cookie sessions but no token refresh/revocation or
-  password reset — see the Definition-of-Done audit
+  has a login endpoint, cookie sessions and a per-request user lookup (roles
+  come from `app_user`, so deactivation and demotion are immediate) but no
+  password reset or SSO — see the Definition-of-Done audit
   (`docs/definition-of-done.md`) for the honest accounting of what's DONE vs
   PARTIAL vs NOT DONE.
 

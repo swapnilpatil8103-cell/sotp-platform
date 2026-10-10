@@ -55,7 +55,7 @@ def test_actor_attribution_ai_vs_human_vs_system(session):
     company = get_or_create_company(session, ticker="AAPL", cik10="0000320193", name="Apple Inc.")
 
     decision = approval.propose(
-        session, company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="wacc", ai_recommended_value=0.09, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=decision.id, decision="APPROVE", user_id="analyst@firm.com")
     execute_valuation_run(
@@ -90,7 +90,7 @@ def test_get_audit_trail_reconstructs_claim_to_output_story(session):
     have six columns."""
     company = get_or_create_company(session, ticker="MSFT", cik10="0000789019", name="Microsoft Corp.")
     decision = approval.propose(
-        session, company_id=company.id, assumption_key="terminal_growth_rate", ai_recommended_value=0.025, ai_rationale="x"
+        session, proposed_by="proposer@firm.com", company_id=company.id, assumption_key="terminal_growth_rate", ai_recommended_value=0.025, ai_rationale="x"
     )
     approval.record_decision(session, decision_id=decision.id, decision="APPROVE", user_id="a@b.com")
     execute_valuation_run(

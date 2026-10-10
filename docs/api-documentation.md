@@ -52,16 +52,16 @@ Required claims: `sub` (non-empty string, at most 256 characters — it is
 written into `decided_by` / `created_by`) and `exp`. Optional: `roles`, a list
 of strings. The algorithm is pinned server-side; unsigned (`alg: none`) and
 differently-signed tokens are rejected. Users get tokens from `POST /auth/login`
-(below); `python scripts/mint_dev_token.py --sub <id> [--roles analyst] [--hours N]`
-mints one for scripts.
+(below); `python scripts/mint_dev_token.py --sub <email> [--hours N]`
+mints one for scripts, for an existing active user only.
 
 ### `POST /auth/login`
 
 Open. Body: `{"email": "...", "password": "..."}` (extra fields are a `422`; email
 at most 254 characters, password 1-1024). Success (`200`):
 `{"access_token", "token_type": "bearer", "expires_in": 3600, "subject", "roles"}`.
-The token's `sub` is the user's lower-cased email and `roles` come from the user
-row. Lifetime is `AUTH_TOKEN_MINUTES` (default 60, clamped to 1..1440).
+The token's `sub` is the user's lower-cased email and `roles` echo the user
+row at login time (informational: see below). Lifetime is `AUTH_TOKEN_MINUTES` (default 60, clamped to 1..1440).
 
 | Status | When |
 |---|---|
@@ -78,13 +78,22 @@ passwords are stored as Argon2id hashes in `app_user`.
 on every `AssumptionDecisionOut`). `POST /valuation/assumptions/{id}/decide` answers
 `403` ("a different user must decide it") when the caller is the proposer, compared
 case-insensitively, whatever the decision; the proposal stays `PENDING`. Proposals
-with no recorded proposer (created before the column existed) are not blocked.
+with no recorded proposer are handled as below.
+
+**Legacy proposals.** Rows that predate proposer tracking hold
+`proposed_by = "unknown-legacy"` (migration `e5f6a7b8c9d0`; a NULL is treated the
+same way). `decide` with `APPROVE` or `EDIT` on one answers `400`: "no recorded
+proposer ... Re-propose the assumption". `REJECT` is allowed so they can be cleared.
+`proposed_by` is mandatory when creating a proposal, so no new unattributed rows
+are created (including by `POST /scenarios/value-unlock/propose`).
 
 | Status | When |
 |---|---|
-| `401` | No `Authorization` header, a non-`Bearer` scheme, or a token that is malformed, badly signed, expired, or missing `exp`/`sub`. Carries `WWW-Authenticate: Bearer`. |
-| `403` | A valid token without the role the endpoint requires. |
+| `401` | No `Authorization` header, a non-`Bearer` scheme, or a token that is malformed, badly signed, expired, or missing `exp`/`sub`; **or a validly signed, unexpired token whose user no longer exists or is deactivated** (`"Account is no longer active."`). Carries `WWW-Authenticate: Bearer`. |
+| `403` | An active user whose `app_user.roles` lack the role the endpoint requires. |
 | `503` | `AUTH_JWT_SECRET` is unset or shorter than 32 characters. The server fails closed and never lets an unauthenticated request through. |
+
+**The user row is authoritative.** `get_current_user` verifies the signature and expiry, then loads the user from `app_user` by (case-insensitive) email on every request; nothing is cached. The roles come from that row; the token's own `roles` claim is ignored. Consequences: deactivating or deleting a user cuts off their existing tokens on the next request, and a demotion or promotion takes effect immediately. The subject recorded in `decided_by` etc. is the row's canonical (lower-case) email.
 
 **Roles.** Only `POST /valuation/assumptions/{decision_id}/decide` and
 `POST /valuation/run` require the `analyst` role. Every other protected

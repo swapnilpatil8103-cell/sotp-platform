@@ -223,7 +223,12 @@ caller is that same user, compared case-insensitively, for APPROVE, EDIT and
 REJECT alike, and leaves the proposal `PENDING` so a different analyst can decide
 it. The check is in `backend/governance/approval.py::record_decision`
 (`SeparationOfDutiesError`), not only the router. Proposals created before the
-column existed have no recorded proposer and cannot be checked.
+column existed were backfilled by migration `e5f6a7b8c9d0` with the sentinel
+`proposed_by = "unknown-legacy"` (`LEGACY_PROPOSER`). With nobody to check against,
+`record_decision` raises `MissingProposerError` for APPROVE and EDIT (HTTP `400`,
+"re-propose"); REJECT is still allowed so the row can be cleared. A NULL is treated
+the same way, and `approval.propose()` requires `proposed_by`, so no new
+unattributed proposals can be created.
 
 ## Versioning and diff (Phase 7)
 

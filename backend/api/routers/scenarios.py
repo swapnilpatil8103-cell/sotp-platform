@@ -19,6 +19,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
+from backend.api.deps import AuthenticatedUser, get_current_user
 from backend.ai.adapter import AIAdapter
 from backend.ai.errors import AIError
 from backend.ai.factory import get_ai_adapter
@@ -88,6 +89,7 @@ def propose_value_unlock(
     conglomerate_discount_pct: Optional[float] = None,
     adapter: AIAdapter = Depends(_get_adapter),
     session: Session = Depends(get_session),
+    user: AuthenticatedUser = Depends(get_current_user),
 ):
     """AI proposes which structural actions might be worth modeling. Each
     idea is recorded as a PENDING AssumptionDecision (Phase 7's governance
@@ -111,6 +113,7 @@ def propose_value_unlock(
             ai_recommended_value=ACTION_TYPE_CODES[idea.action_type],
             ai_rationale=idea.rationale,
             subject=idea.target_segment or idea.action_type,
+            proposed_by=user.subject,
         )
         proposals.append({"decision_id": decision.id, "action_type": idea.action_type, "target_segment": idea.target_segment, "rationale": idea.rationale})
 
