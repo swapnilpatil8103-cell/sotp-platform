@@ -21,13 +21,6 @@ client = TestClient(app, raise_server_exceptions=False)
 PASSWORD = "correct horse battery staple"
 
 
-@pytest.fixture(autouse=True)
-def _fresh_throttle():
-    users.reset_throttle()
-    yield
-    users.reset_throttle()
-
-
 def _login(email: str, password: str):
     return client.post("/auth/login", json={"email": email, "password": password})
 
@@ -133,24 +126,6 @@ def test_inactive_user_cannot_log_in_and_looks_like_a_bad_password(session, anal
 
     resp = _login("login.alice@example.com", PASSWORD)
     assert resp.status_code == 401 and resp.json() == {"detail": "Invalid email or password."}
-
-
-def test_repeated_failures_are_throttled_and_even_the_right_password_waits(analyst):
-    for _ in range(users.MAX_FAILURES):
-        assert _login("login.alice@example.com", "wrong password here").status_code == 401
-
-    resp = _login("login.alice@example.com", PASSWORD)
-
-    assert resp.status_code == 429
-    assert int(resp.headers["retry-after"]) > 0
-
-
-def test_success_resets_the_failure_counter(analyst):
-    for _ in range(users.MAX_FAILURES - 1):
-        _login("login.alice@example.com", "wrong password here")
-    assert _login("login.alice@example.com", PASSWORD).status_code == 200
-    for _ in range(users.MAX_FAILURES - 1):
-        assert _login("login.alice@example.com", "wrong password here").status_code == 401
 
 
 def test_login_records_last_login(session, analyst):

@@ -24,5 +24,8 @@ class AppUser(SQLModel, table=True):
     # Comma-separated role names, e.g. "analyst". Empty = read-only user.
     roles: str = Field(default="", max_length=256)
     is_active: bool = Field(default=True)
+    # Embedded in every token as "tv". Bumped by a password change or an admin
+    # "revoke sessions", which invalidates all tokens issued before it.
+    token_version: int = Field(default=0)
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
     last_login_at: Optional[datetime] = Field(default=None)

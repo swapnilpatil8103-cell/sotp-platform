@@ -51,6 +51,7 @@ def _valid_claims(**overrides) -> dict:
     claims = {
         "sub": "analyst@firm.com",
         "roles": ["analyst"],
+        "tv": 0,
         "exp": datetime.now(timezone.utc) + timedelta(hours=1),
     }
     claims.update(overrides)
@@ -127,6 +128,10 @@ def test_every_route_except_health_requires_a_token(method, path):
         (_forge(_valid_claims(exp=None)), "no exp claim"),
         (_forge(_valid_claims(sub=None)), "no sub claim"),
         (_forge(_valid_claims(sub="   ")), "blank sub"),
+        (_forge(_valid_claims(tv=None)), "no tv (token version) claim"),
+        (_forge(_valid_claims(tv="0")), "tv is a string"),
+        (_forge(_valid_claims(tv=True)), "tv is a bool"),
+        (_forge(_valid_claims(tv=1)), "tv does not match the user row"),
         (_forge(_valid_claims(sub="x" * (MAX_SUBJECT_LENGTH + 1))), "sub longer than the DB columns"),
         (_bearer(jwt.encode(_valid_claims(), None, algorithm="none")), "unsigned token (alg=none)"),
     ],

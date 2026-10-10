@@ -45,6 +45,63 @@ export function isSameOrigin(request: Request): boolean {
   }
 }
 
+/** Largest request body the proxy will forward. Mirrors the backend's MAX_REQUEST_BODY_BYTES (default 1 MiB). */
+export function maxBodyBytes(): number {
+  const n = Number(process.env.MAX_PROXY_BODY_BYTES);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1024 * 1024;
+}
+
+/** Credential routes only ever receive a few short strings. */
+export const AUTH_BODY_BYTES = 16 * 1024;
+
+/**
+ * Read a request body, giving up (null) as soon as it exceeds `limit` bytes.
+ * Checks Content-Length first, then counts the bytes actually streamed, so a
+ * missing or lying Content-Length cannot be used to buffer an unbounded body.
+ */
+export async function readBodyLimited(request: Request, limit: number): Promise<ArrayBuffer | null> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) return null;
+  if (!request.body) return new ArrayBuffer(0);
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out.buffer;
+}
+
+/** The standard 413 body, shared by every route. */
+export function tooLarge(limit: number) {
+  return Response.json({ detail: `Request body too large (limit ${limit} bytes).` }, { status: 413 });
+}
+
+/**
+ * Client address to hand to the backend's login throttle. The backend (with
+ * AUTH_TRUST_FORWARDED_FOR=true) uses the RIGHTMOST X-Forwarded-For entry, which
+ * must be the address our own server saw. Without it every user would look like
+ * this server.
+ */
+export function forwardedForHeaders(request: Request): Record<string, string> {
+  const xff = request.headers.get("x-forwarded-for");
+  return xff ? { "X-Forwarded-For": xff } : {};
+}
+
 export type SessionInfo = { subject: string; roles: string[]; expires_at: number };
 
 /** Read the (unverified) claims of our own token, for display only. The backend remains the authority. */

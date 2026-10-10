@@ -49,7 +49,8 @@ routes added later — is protected by default.
 
 **Token.** HS256, signed with `AUTH_JWT_SECRET` (at least 32 characters).
 Required claims: `sub` (non-empty string, at most 256 characters — it is
-written into `decided_by` / `created_by`) and `exp`. Optional: `roles`, a list
+written into `decided_by` / `created_by`), `exp`, and `tv` (an integer, see
+"Token version" below). Optional: `roles`, a list
 of strings. The algorithm is pinned server-side; unsigned (`alg: none`) and
 differently-signed tokens are rejected. Users get tokens from `POST /auth/login`
 (below); `python scripts/mint_dev_token.py --sub <email> [--hours N]`
@@ -66,11 +67,78 @@ row at login time (informational: see below). Lifetime is `AUTH_TOKEN_MINUTES` (
 | Status | When |
 |---|---|
 | `401` | Unknown email, wrong password or disabled account; identical body `{"detail": "Invalid email or password."}`. |
-| `429` | Five failed attempts for that email within 15 minutes; `Retry-After` gives the seconds left (in-memory, per process). |
+| `429` | Locked out by the throttle (below); `Retry-After` gives the seconds left. A locked attempt is rejected before any password check and is not recorded. |
 | `503` | `AUTH_JWT_SECRET` is unset or too short. |
 
 Users are created with `scripts/create_user.py` (there is no sign-up endpoint);
 passwords are stored as Argon2id hashes in `app_user`.
+
+**Throttle.** Failed attempts are rows in `login_attempt` (`email_hash` = HMAC-SHA256 of
+the lower-cased email keyed by `AUTH_JWT_SECRET`, `ip`, `ts`, `success`), so the limit is
+shared by all workers and survives restarts. Over a rolling 15 minutes, a caller is
+locked for `base * 2^(failures - threshold)` seconds after its latest failure, up to a
+cap:
+
+| Scope | Key | Threshold | Base | Cap |
+|---|---|---|---|---|
+| pair | (email, ip) | 5 | 60 s | 15 min |
+| ip | ip across all emails | 20 | 60 s | 15 min |
+| email | email across all ips | 10 | 60 s | 5 min |
+
+The longest applicable lock is reported. Attempts made while locked are neither
+checked nor recorded, so they cannot extend a lock. A successful login clears that
+(email, ip) pair's failures, and the email-wide lock does not apply to an ip with a
+successful login for that email in the last 30 days. Rows older than the window
+(failures) or 30 days (successes) are deleted as new ones are written. Unknown
+emails are recorded too, so the table does not reveal which accounts exist. The ip
+is the socket peer, or with `AUTH_TRUST_FORWARDED_FOR=true` the rightmost
+`X-Forwarded-For` entry; see the README for when that is safe.
+
+### Token version
+
+Every token carries `tv`, which must equal `app_user.token_version`. A mismatch (or a
+missing/non-integer `tv`) is a `401` ("Session has been revoked. Sign in again."). The
+version is bumped by `POST /auth/change-password`, `POST /auth/revoke-sessions`,
+`scripts/create_user.py --revoke-sessions` and `--reset-password`.
+
+### `POST /auth/change-password`
+
+Requires a Bearer token. Body: `{"current_password", "new_password"}` (extra fields are a
+`422`). The caller can only change their own password. Success (`200`) returns the
+same body as login with a **new** token (version +1); every previously issued token,
+including the one used for this call, stops working.
+
+| Status | When |
+|---|---|
+| `401` | No/invalid token, or the account is no longer active. |
+| `403` | `current_password` is wrong. (Not 401, so clients do not treat it as an expired session.) Counts toward the login throttle. |
+| `400` | `new_password` equals the current password. |
+| `422` | `new_password` is shorter than 12 or longer than 1024 characters, or unknown fields. |
+| `429` | Locked out by the throttle. |
+| `503` | `AUTH_JWT_SECRET` is unset or too short. |
+
+### `POST /auth/revoke-sessions`
+
+Requires the `admin` role. Body: `{"email"}`. Invalidates all of that user's existing
+tokens and returns `{"email", "token_version"}`; the user can sign in again
+normally. `404` for an unknown email, `403` without the role. An admin may revoke
+themselves.
+
+### Request limits and CORS
+
+Request bodies over `MAX_REQUEST_BODY_BYTES` (default 1048576) are answered `413`
+`{"detail": "Request body too large (limit N bytes)."}` before the route runs, whether
+or not `Content-Length` is present or accurate (bytes are counted as they arrive). The
+limit applies to every route, including the unauthenticated login. The Next.js proxy
+applies the same limit (`MAX_PROXY_BODY_BYTES`, and 16 KB on its login and
+change-password routes) and answers `413` itself.
+
+CORS allows the methods `GET, POST, PUT, PATCH, DELETE, OPTIONS` and the request
+headers `Authorization, Content-Type, Accept` (plus the CORS-safelisted ones the
+middleware always adds), with credentials. `ALLOWED_ORIGINS` must list exact
+`scheme://host[:port]` origins; a wildcard anywhere in it makes the server refuse to
+start. A preflight asking for another method or header, or from an unlisted
+origin, gets `400`.
 
 ### Separation of duties
 

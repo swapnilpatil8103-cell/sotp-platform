@@ -33,8 +33,17 @@ services:
       LSE_API_BASE_URL: ${LSE_API_BASE_URL:-https://api.londonstrategicedge.com}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       AUTH_TOKEN_MINUTES: ${AUTH_TOKEN_MINUTES:-60}
+      MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-1048576}
+      # The web server forwards each user's address in X-Forwarded-For, and the
+      # login throttle trusts the rightmost entry. That is only safe because the
+      # backend is published on loopback below, so nothing outside this host can
+      # reach it directly and forge the header. Remove both together. The web
+      # server (port 3000) passes a client-supplied X-Forwarded-For through
+      # unchanged, so for production put a reverse proxy in front of it that
+      # appends the real client address; see the README ("Login throttling").
+      AUTH_TRUST_FORWARDED_FOR: "true"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
   web:
     build:

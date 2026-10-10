@@ -1,6 +1,15 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { SESSION_COOKIE, backendBaseUrl, isSameOrigin, sessionCookieOptions } from "@/lib/session";
+import {
+  SESSION_COOKIE,
+  backendBaseUrl,
+  isSameOrigin,
+  forwardedForHeaders,
+  maxBodyBytes,
+  readBodyLimited,
+  sessionCookieOptions,
+  tooLarge,
+} from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -32,12 +41,22 @@ async function forward(request: Request, ctx: { params: Promise<{ path: string[]
     return NextResponse.json({ detail: "Not signed in." }, { status: 401 });
   }
 
+  // Refuse an oversized body before contacting the backend (the backend has its own limit too).
+  let body: ArrayBuffer | undefined;
+  if (!isRead) {
+    const limit = maxBodyBytes();
+    const read = await readBodyLimited(request, limit);
+    if (read === null) return tooLarge(limit);
+    body = read;
+  }
+
   const search = new URL(request.url).search;
   const target = `${backendBaseUrl()}/${path.map(encodeURIComponent).join("/")}${search}`;
 
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
   const contentType = request.headers.get("content-type");
   if (contentType) headers["Content-Type"] = contentType;
+  Object.assign(headers, forwardedForHeaders(request));
   const accept = request.headers.get("accept");
   if (accept) headers["Accept"] = accept;
 
@@ -46,7 +65,7 @@ async function forward(request: Request, ctx: { params: Promise<{ path: string[]
     upstream = await fetch(target, {
       method: request.method,
       headers,
-      body: isRead ? undefined : await request.arrayBuffer(),
+      body,
       cache: "no-store",
       redirect: "manual",
     });

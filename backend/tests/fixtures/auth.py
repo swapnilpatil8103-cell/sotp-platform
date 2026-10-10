@@ -25,6 +25,7 @@ TEST_ROSTER: dict[str, str] = {
     "alice@firm.com": ROLE_ANALYST,
     "bob@firm.com": ROLE_ANALYST,
     "proposer@firm.com": ROLE_ANALYST,
+    "admin@firm.com": "admin",
     "viewer@firm.com": "",
     "v@firm.com": "",
 }

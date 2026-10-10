@@ -2,6 +2,7 @@
 
     python scripts/create_user.py --email you@example.com --roles analyst
     python scripts/create_user.py --email you@example.com --reset-password
+    python scripts/create_user.py --email you@example.com --revoke-sessions
 
 The password is read from a hidden prompt (or the SOTP_NEW_PASSWORD env var for
 automation), never from the command line, so it does not land in shell history.
@@ -45,7 +46,17 @@ def main() -> int:
     parser.add_argument("--email", required=True)
     parser.add_argument("--roles", default="analyst", help="comma-separated; empty for a read-only user (default: analyst)")
     parser.add_argument("--reset-password", action="store_true", help="change the password of an existing user")
+    parser.add_argument("--revoke-sessions", action="store_true", help="invalidate all existing tokens of a user")
     args = parser.parse_args()
+
+    if args.revoke_sessions:
+        with Session(get_engine()) as session:
+            user = users.get_user(session, args.email)
+            if user is None:
+                raise SystemExit(f"No user {args.email}.")
+            users.revoke_sessions(session, user)
+            print(f"Revoked all sessions for {user.email} (token_version={user.token_version}).")
+        return 0
 
     password = _read_password()
     roles = users.parse_roles(args.roles)
@@ -58,6 +69,7 @@ def main() -> int:
                 if not (users.MIN_PASSWORD_LENGTH <= len(password) <= users.MAX_PASSWORD_LENGTH):
                     raise SystemExit(f"Password must be {users.MIN_PASSWORD_LENGTH}-{users.MAX_PASSWORD_LENGTH} characters.")
                 user.password_hash = users.hash_password(password)
+                user.token_version += 1  # a reset must also end the old sessions
                 session.add(user)
                 session.commit()
                 print(f"Password updated for {user.email}.")

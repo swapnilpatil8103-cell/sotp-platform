@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
-import { SESSION_COOKIE, backendBaseUrl, isSameOrigin, sessionCookieOptions } from "@/lib/session";
+import {
+  AUTH_BODY_BYTES,
+  SESSION_COOKIE,
+  backendBaseUrl,
+  forwardedForHeaders,
+  isSameOrigin,
+  readBodyLimited,
+  sessionCookieOptions,
+  tooLarge,
+} from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -9,9 +18,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ detail: "Cross-origin request refused." }, { status: 403 });
   }
 
+  const raw = await readBodyLimited(request, AUTH_BODY_BYTES);
+  if (raw === null) return tooLarge(AUTH_BODY_BYTES);
+
   let body: unknown;
   try {
-    body = await request.json();
+    body = JSON.parse(new TextDecoder().decode(raw));
   } catch {
     return NextResponse.json({ detail: "Invalid request." }, { status: 400 });
   }
@@ -24,7 +36,7 @@ export async function POST(request: Request) {
   try {
     upstream = await fetch(`${backendBaseUrl()}/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...forwardedForHeaders(request) },
       body: JSON.stringify({ email, password }),
       cache: "no-store",
     });

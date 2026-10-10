@@ -22,6 +22,9 @@ export function SessionBar() {
   return (
     <div className="flex items-center gap-3 text-xs text-[#111827]/60">
       <span>{subject}</span>
+      <a href="/account" className="underline hover:text-[#2563EB]">
+        Password
+      </a>
       <button onClick={signOut} className="rounded-[6px] border border-[#E5E7EB] px-2 py-1 hover:border-[#2563EB] hover:text-[#2563EB]">
         Sign out
       </button>

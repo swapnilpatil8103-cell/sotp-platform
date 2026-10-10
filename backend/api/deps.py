@@ -12,6 +12,9 @@ Every router except ``/health`` is mounted with ``get_current_user`` (see
   ``ValuationRun.created_by`` and the ``human:<sub>`` audit-log actor. No
   request body can supply an identity.
 - ``exp``   -- expiry; tokens without one are rejected.
+- ``tv``    -- token version. Must equal ``app_user.token_version``; a password
+  change or an admin "revoke sessions" bumps the row, so every older token stops
+  working at once. Tokens without it are rejected.
 - ``roles`` -- informational only. The token proves WHO the caller is; the
   ``app_user`` row decides whether they may still act and with which roles.
 
@@ -41,7 +44,7 @@ from functools import lru_cache
 from typing import Callable, Iterable, Optional
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session, select
 
@@ -71,6 +74,7 @@ def get_market_data_client() -> MarketDataClient:
 # --------------------------------------------------------------------------
 
 ROLE_ANALYST = "analyst"
+ROLE_ADMIN = "admin"
 JWT_ALGORITHM = "HS256"
 MIN_SECRET_LENGTH = 32
 # Matches the column widths of AssumptionDecision.decided_by and
@@ -108,13 +112,16 @@ def create_access_token(
     subject: str,
     roles: Iterable[str] = (),
     expires_in: timedelta = DEFAULT_TOKEN_LIFETIME,
+    token_version: int = 0,
 ) -> str:
     """Mint a signed token for ``subject`` with ``roles``. Raises
-    ``AuthConfigError`` if the signing secret is not configured."""
+    ``AuthConfigError`` if the signing secret is not configured.
+    ``token_version`` must match the user's current ``app_user.token_version``."""
     now = datetime.now(timezone.utc)
     claims = {
         "sub": subject,
         "roles": sorted(set(roles)),
+        "tv": token_version,
         "iat": now,
         "exp": now + expires_in,
     }
@@ -173,6 +180,9 @@ def get_current_user(
     row = session.exec(select(AppUser).where(AppUser.email == normalize_email(subject))).first()
     if row is None or not row.is_active:
         raise _unauthorized("Account is no longer active.")
+    token_version = claims.get("tv")
+    if isinstance(token_version, bool) or not isinstance(token_version, int) or token_version != row.token_version:
+        raise _unauthorized("Session has been revoked. Sign in again.")
 
     return AuthenticatedUser(subject=row.email, roles=frozenset(parse_roles(row.roles)))
 
@@ -192,3 +202,26 @@ def require_role(role: str) -> Callable[[AuthenticatedUser], AuthenticatedUser]:
 
 
 require_analyst = require_role(ROLE_ANALYST)
+require_admin = require_role(ROLE_ADMIN)
+
+
+def client_ip(request: Request) -> str:
+    """The caller's IP address, as recorded by the login throttle.
+
+    Behind the Next.js server the socket peer is that server, so every user would
+    look like one address. With ``AUTH_TRUST_FORWARDED_FOR=true`` the RIGHTMOST
+    ``X-Forwarded-For`` entry is used instead: the one appended by our own proxy,
+    which a client cannot forge (anything to its left can be). Only enable it when
+    the backend is reachable solely through that proxy. Falls back to the socket
+    peer, and to "unknown" if there is none.
+    """
+    import ipaddress
+
+    if os.environ.get("AUTH_TRUST_FORWARDED_FOR", "").strip().lower() == "true":
+        forwarded = request.headers.get("x-forwarded-for", "")
+        candidate = forwarded.split(",")[-1].strip() if forwarded else ""
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            pass
+    return request.client.host if request.client else "unknown"

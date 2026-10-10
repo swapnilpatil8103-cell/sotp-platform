@@ -14,6 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from backend.api.body_limit import BodySizeLimitMiddleware
 from backend.api.deps import get_current_user
 from backend.api.routers import auth, companies, filings, market_data, segments, valuation, scenarios, memo
 
@@ -23,15 +24,48 @@ app = FastAPI(
     version="0.1.0",
 )
 
-_allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000")
-origins = [o.strip() for o in _allowed_origins.split(",") if o.strip()]
+# Explicit, not "*": the API only needs these verbs and request headers.
+CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+CORS_ALLOW_HEADERS = ["Authorization", "Content-Type", "Accept"]
+CORS_ALLOW_CREDENTIALS = True
 
+
+def parse_allowed_origins(raw: str, *, allow_credentials: bool = CORS_ALLOW_CREDENTIALS) -> list[str]:
+    """Parse ALLOWED_ORIGINS, refusing configurations that are unsafe.
+
+    A wildcard origin combined with credentials would let any website make
+    authenticated requests, so it aborts startup instead of being "handled". Every
+    entry must be an exact http(s) origin (scheme://host[:port], no path).
+    """
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    for origin in origins:
+        if "*" in origin and allow_credentials:
+            raise RuntimeError(
+                f"ALLOWED_ORIGINS contains a wildcard ({origin!r}) while credentials are allowed. "
+                "List explicit origins, e.g. ALLOWED_ORIGINS=https://app.example.com"
+            )
+        if origin == "*":  # only reachable when credentials are off
+            continue
+        # Partial wildcards (https://*.example.com) are not supported by the CORS
+        # middleware: they would silently match nothing, so refuse them outright.
+        if "*" in origin or not origin.startswith(("http://", "https://")) or "/" in origin.split("://", 1)[1]:
+            raise RuntimeError(
+                f"ALLOWED_ORIGINS entry {origin!r} is not an origin of the form scheme://host[:port]."
+            )
+    return origins
+
+
+origins = parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000"))
+
+# Added first = innermost. CORS is added last so it is outermost and a 413 from
+# the body limit still carries CORS headers.
+app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
+    allow_methods=CORS_ALLOW_METHODS,
+    allow_headers=CORS_ALLOW_HEADERS,
 )
 
 

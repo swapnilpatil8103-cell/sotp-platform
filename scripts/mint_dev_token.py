@@ -54,7 +54,9 @@ def main() -> int:
         return 1
 
     try:
-        token = create_access_token(user.email, users.parse_roles(user.roles), timedelta(hours=args.hours))
+        token = create_access_token(
+            user.email, users.parse_roles(user.roles), timedelta(hours=args.hours), token_version=user.token_version
+        )
     except AuthConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

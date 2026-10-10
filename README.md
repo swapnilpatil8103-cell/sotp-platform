@@ -99,9 +99,9 @@ curl -s -X POST http://localhost:8000/auth/login -H "Content-Type: application/j
 `POST /auth/login` is the only open route besides `/health`. It returns a
 token valid for 60 minutes (`AUTH_TOKEN_MINUTES`); the password is verified
 against an Argon2id hash. Wrong password, unknown email and disabled account all
-return the same `401`, and five failures for an email within 15 minutes return
-`429` (an in-memory, per-process limit). Passwords must be at least 12
-characters.
+return the same `401`. Failures are throttled (`429` with `Retry-After`) by a
+**database-backed** counter, so the limit survives restarts and is shared by every
+worker; see "Login throttling" below. Passwords must be at least 12 characters.
 
 **The browser never holds the token.** The web app signs in through
 `/api/auth/login`, a Next.js route handler that stores the token in an
@@ -136,10 +136,55 @@ re-propose. They can still be rejected, which clears them out.
 If `AUTH_JWT_SECRET` is unset or shorter than 32 characters, every protected
 endpoint (and login) answers `503`: the server fails closed.
 
-**Not built yet:** token refresh, password reset or a user-admin page, a rate
-limiter shared across instances, MFA/SSO. (Revoking access needs no extra
-machinery: deactivate the user, see above.) The interactive docs (`/docs`,
-`/openapi.json`) remain open, and each request costs one indexed user lookup.
+**Login throttling.** Every attempt is recorded in the `login_attempt` table
+(an HMAC of the email, never the address itself, plus the IP and time). Three
+counters over a rolling 15 minutes lock a caller out with exponential back-off:
+
+| Scope | Key | Locks after | Lock length |
+|---|---|---|---|
+| pair | (email, ip) | 5 failures | 1 min, doubling, max 15 min |
+| ip | ip, all emails | 20 failures | 1 min, doubling, max 15 min |
+| email | email, all ips | 10 failures | 1 min, doubling, max 5 min |
+
+Attempts made *while locked* are rejected without being recorded, so hammering a
+locked account cannot extend the lock. Guessing someone's password from your own
+address locks only (their email, your ip), not them. The email-wide lock is
+skipped for an address that has already logged in successfully as that user in
+the last 30 days, so spreading failures across many addresses does not lock the
+real user out of where they actually sign in. Change-password attempts with a wrong
+current password count too.
+
+The "ip" is the socket peer unless `AUTH_TRUST_FORWARDED_FOR=true`, which uses the
+rightmost `X-Forwarded-For` entry. Behind the Next.js server you need it (else every
+web user looks like one address, which would make the pair lock global), **but only
+if the backend is reachable solely through your own proxy** and that proxy
+appends the real client address. `next start` exposed directly to the internet
+passes a client-supplied `X-Forwarded-For` through unchanged, so a client could
+pick its own throttle address; the email-wide limit and Argon2id then remain the
+defence. Put a reverse proxy in front for production.
+
+**Changing a password and revoking sessions.** Every token carries a version
+(`tv`) that must equal `app_user.token_version`. `POST /auth/change-password`
+(current password required; new one at least 12 characters and different) and the
+admin action `POST /auth/revoke-sessions` bump it, which invalidates every token
+issued earlier, including on other devices. Changing your own password returns a
+fresh token, and the web app (`/account`, linked from the header) swaps the cookie
+so you stay signed in. `scripts/create_user.py --revoke-sessions` does the same from a
+shell, and `--reset-password` also bumps the version. The admin endpoint needs the
+`admin` role: `create_user.py --roles admin,analyst`.
+
+**Request size and CORS.** Bodies over 1 MiB (`MAX_REQUEST_BODY_BYTES`) get `413` from
+the API, counted as they stream so a missing or false `Content-Length` does not
+help, and from the web proxy (`MAX_PROXY_BODY_BYTES`; its login routes allow 16 KB).
+CORS allows only `GET POST PUT PATCH DELETE OPTIONS` and the `Authorization`,
+`Content-Type` and `Accept` headers. `ALLOWED_ORIGINS` must be exact origins: a
+`*` (or `https://*.example.com`) makes the server refuse to start, because
+credentials are allowed.
+
+**Not built yet:** a forgot-password / reset-by-email flow, a user-admin page, MFA
+or SSO. Tokens issued before the token-version change are rejected (sign in
+again). The interactive docs (`/docs`, `/openapi.json`) remain open, and each
+request costs one indexed user lookup.
 
 ### Database (Postgres/Supabase) + migrations
 
@@ -256,7 +301,11 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
   secret for API Bearer tokens (see [Authentication](#authentication)). If
   unset or too short, every endpoint except `/health` answers `503`. **Not
   required to run the test suite** — `conftest.py` pins a test-only secret.
-- `ALLOWED_ORIGINS` — CORS allowlist for the backend.
+- `ALLOWED_ORIGINS` — exact origins allowed by CORS; a wildcard aborts startup.
+- `AUTH_TRUST_FORWARDED_FOR` — `true` to take the login throttle's client address from
+  the rightmost `X-Forwarded-For` entry (see Login throttling). Default `false`.
+- `MAX_REQUEST_BODY_BYTES` — request body limit for the API (default 1048576);
+  `MAX_PROXY_BODY_BYTES` is the web proxy's (set in `apps/web/.env.local`).
 - `AUTH_TOKEN_MINUTES` — lifetime of a login token (default 60, clamped to
   1..1440).
 - `API_BASE_URL` — set in `apps/web/.env.local`: where the Next.js server reaches
@@ -278,8 +327,8 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
 
 ## Status
 
-All 10 phases complete as scoped. Backend: 585 unit/router tests +
-12 integration tests (real SEC EDGAR calls, `-m integration`), 597 in total, all passing.
+All 10 phases complete as scoped. Backend: 684 unit/router tests +
+12 integration tests (real SEC EDGAR calls, `-m integration`), 696 in total, all passing.
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
 is PARTIAL: login, sessions and live user checks built; no password reset or SSO). CI and containers are in place (see "CI and containers" below; item 40 is
