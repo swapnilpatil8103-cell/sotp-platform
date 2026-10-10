@@ -21,10 +21,10 @@ function StatusBadge({ status }: { status: DoDStatus }) {
   );
 }
 
-export default function DataIntegrityPage({
+export default async function DataIntegrityPage({
   params,
 }: {
-  params: { ticker: string };
+  params: Promise<{ ticker: string }>;
 }) {
   const doneCount = DEFINITION_OF_DONE_ITEMS.filter((i) => i.status === "DONE").length;
   const total = DEFINITION_OF_DONE_ITEMS.length;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { ApiError, authHeaders, getCompanyId } from "@/lib/api";
 import type { AssumptionDecisionOut, ValueUnlockProposeResponse } from "@/lib/types";
 import { AIPanel, Card, ErrorState, SectionHeading, Table } from "@/components/ui";
@@ -16,8 +16,8 @@ const BASE = () => process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ?? 
  * compute loop against the real endpoints. company_id is resolved
  * automatically from the ticker via GET /companies/{ticker}/id.
  */
-export default function ValueUnlockPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function ValueUnlockPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [companyId, setCompanyId] = useState<number | "">("");
   const [resolveError, setResolveError] = useState<unknown>(null);
 

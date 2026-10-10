@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, use } from "react";
 import { autoValueSegments, computeSotp, ApiError } from "@/lib/api";
 import type {
   AutoValueSegmentsRequest,
@@ -23,8 +23,8 @@ const DEFAULT_SEGMENTS: SotpSegmentInput[] = [
  * lets an analyst assemble the final bridge from those pre-computed EVs
  * plus balance-sheet figures and submit directly to POST /valuation/sotp.
  */
-export default function SotpPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function SotpPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [segments, setSegments] = useState<SotpSegmentInput[]>(DEFAULT_SEGMENTS);
   const [cash, setCash] = useState(10_000_000_000);
   const [debt, setDebt] = useState(15_000_000_000);

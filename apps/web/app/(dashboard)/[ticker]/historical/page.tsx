@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { getHistoricalTrends } from "@/lib/api";
 import type { HistoricalTrendsRead } from "@/lib/types";
 import {
@@ -23,8 +23,8 @@ function num(v?: number | null): string {
   return v == null ? "—" : v.toLocaleString();
 }
 
-export default function HistoricalTrendsPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function HistoricalTrendsPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [data, setData] = useState<HistoricalTrendsRead | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);

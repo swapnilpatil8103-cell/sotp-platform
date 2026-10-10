@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, use } from "react";
 import { runScenarios } from "@/lib/api";
 import type { DcfInput, ScenarioEngineResult } from "@/lib/types";
 import { Card, ErrorState, MetricCard, SectionHeading, Table } from "@/components/ui";
@@ -25,8 +25,8 @@ function baseDcfInput(growth: number, margin: number): DcfInput {
   };
 }
 
-export default function ScenariosPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function ScenariosPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [bullGrowth, setBullGrowth] = useState(0.15);
   const [baseGrowth, setBaseGrowth] = useState(0.08);
   const [bearGrowth, setBearGrowth] = useState(0.02);

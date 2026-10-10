@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, use } from "react";
 import { ApiError, authHeaders } from "@/lib/api";
 import type { DcfInput, ReverseValuationResult } from "@/lib/types";
 import { Card, ClassificationBadge, ErrorState, MetricCard, SectionHeading } from "@/components/ui";
@@ -22,8 +22,8 @@ const BASE_DCF: DcfInput = {
   diluted_shares_outstanding: 1_000_000_000,
 };
 
-export default function ReverseValuationPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function ReverseValuationPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [targetEv, setTargetEv] = useState(600_000_000_000);
   const [solveTarget, setSolveTarget] = useState<"revenue_growth" | "terminal_growth">("revenue_growth");
   const [searchLow, setSearchLow] = useState(-0.1);

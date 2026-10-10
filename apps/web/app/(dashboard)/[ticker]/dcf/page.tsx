@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, use } from "react";
 import { computeDcf, computePeerInformedBeta, getSuggestedRiskFreeRate } from "@/lib/api";
 import type { BetaAnalysisResult, DcfInput, DcfResult, PeerBetaInputRow } from "@/lib/types";
 import { AIBadge, Card, ErrorState, MetricCard, SectionHeading, Table } from "@/components/ui";
@@ -12,8 +12,8 @@ function repeat(v: number): number[] {
   return Array.from({ length: N_YEARS }, () => v);
 }
 
-export default function DcfPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function DcfPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [baseRevenue, setBaseRevenue] = useState(100_000_000_000);
   const [growth, setGrowth] = useState(0.08);
   const [ebitMargin, setEbitMargin] = useState(0.24);

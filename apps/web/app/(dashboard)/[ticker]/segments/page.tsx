@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { getCompanySegments } from "@/lib/api";
 import type { CompanySegmentsRead } from "@/lib/types";
 import {
@@ -21,8 +21,8 @@ const METRIC_LABEL: Record<string, string> = {
   assets: "Assets",
 };
 
-export default function SegmentsPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function SegmentsPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [data, setData] = useState<CompanySegmentsRead | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);

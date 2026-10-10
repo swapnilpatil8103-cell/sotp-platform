@@ -19,14 +19,14 @@ const NAV_ITEMS: { href: string; label: string; index: number }[] = [
   { href: "/data-integrity", label: "Data Integrity", index: 16 },
 ];
 
-export default function TickerLayout({
+export default async function TickerLayout({
   children,
   params,
 }: {
   children: React.ReactNode;
-  params: { ticker: string };
+  params: Promise<{ ticker: string }>;
 }) {
-  const ticker = params.ticker?.toUpperCase() ?? "";
+  const ticker = (await params).ticker?.toUpperCase() ?? "";
   const base = `/${ticker}`;
 
   return (

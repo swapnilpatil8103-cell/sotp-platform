@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, use } from "react";
 import { computeComps } from "@/lib/api";
 import type { CompPeer, CompsInput, CompsResult, MultipleMetric } from "@/lib/types";
 import { Card, ErrorState, MetricCard, SectionHeading, Table } from "@/components/ui";
@@ -12,8 +12,8 @@ const DEFAULT_PEERS: CompPeer[] = [
 
 const METRICS: MultipleMetric[] = ["ev_to_revenue", "ev_to_ebitda", "ev_to_ebit", "price_to_earnings", "price_to_book"];
 
-export default function CompsPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function CompsPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [peers, setPeers] = useState<CompPeer[]>(DEFAULT_PEERS);
   const [targetRevenue, setTargetRevenue] = useState(100_000_000_000);
   const [targetEbitda, setTargetEbitda] = useState(28_000_000_000);

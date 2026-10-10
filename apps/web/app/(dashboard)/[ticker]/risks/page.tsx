@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, use } from "react";
 import { ApiError, authHeaders } from "@/lib/api";
 import type { RiskDashboardResult } from "@/lib/types";
 import { AIBadge, Card, ErrorState, RiskBadge, SectionHeading } from "@/components/ui";
@@ -14,8 +14,8 @@ const CATEGORY_KEYS: (keyof RiskDashboardResult)[] = [
   "execution_risk",
 ];
 
-export default function RisksPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function RisksPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [coverage, setCoverage] = useState(70);
   const [methodologies, setMethodologies] = useState(1);
   const [spread, setSpread] = useState(25);

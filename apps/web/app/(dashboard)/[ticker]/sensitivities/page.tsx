@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, use } from "react";
 import { ApiError, authHeaders } from "@/lib/api";
 import type { SensitivityResult } from "@/lib/types";
 import { Card, ErrorState, SectionHeading } from "@/components/ui";
@@ -35,8 +35,8 @@ function range(center: number, step: number, n: number): number[] {
  * phase (see backend/api/routers/valuation.py) purely to expose the
  * existing pure-function sensitivity engine; no math changed.
  */
-export default function SensitivitiesPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function SensitivitiesPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [result, setResult] = useState<SensitivityResult | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);

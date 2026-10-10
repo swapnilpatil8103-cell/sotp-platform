@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import {
   ApiError,
   getCompany,
@@ -27,9 +27,9 @@ import { SegmentValuationChart } from "@/components/charts";
 export default function OverviewPage({
   params,
 }: {
-  params: { ticker: string };
+  params: Promise<{ ticker: string }>;
 }) {
-  const ticker = params.ticker.toUpperCase();
+  const ticker = use(params).ticker.toUpperCase();
   const [company, setCompany] = useState<CompanyRead | null>(null);
   const [market, setMarket] = useState<MarketDataRead | null>(null);
   const [filings, setFilings] = useState<FilingsResponse | null>(null);

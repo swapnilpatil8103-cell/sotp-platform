@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, use } from "react";
 import { Card, MetricCard, SectionHeading } from "@/components/ui";
 import { FootballFieldChart, type FootballFieldRange } from "@/components/charts";
 
@@ -24,8 +24,8 @@ import { FootballFieldChart, type FootballFieldRange } from "@/components/charts
  * referencing results computed on the other tabs rather than recomputing
  * anything here.
  */
-export default function ValuationTriangulationPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function ValuationTriangulationPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [sotpPrice, setSotpPrice] = useState<number | "">("");
   const [dcfPrice, setDcfPrice] = useState<number | "">("");
   const [compsPrice, setCompsPrice] = useState<number | "">("");

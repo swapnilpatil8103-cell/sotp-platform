@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { getMemo } from "@/lib/api";
 import type { MemoResponse } from "@/lib/types";
 import { AIBadge, Card, ErrorState, PageSkeleton, SectionHeading } from "@/components/ui";
@@ -14,8 +14,8 @@ import { AIBadge, Card, ErrorState, PageSkeleton, SectionHeading } from "@/compo
  * data" message rather than fabricating a memo, and this page renders that
  * as an honest error state.
  */
-export default function MemoPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function MemoPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [memo, setMemo] = useState<MemoResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { diffCompanyRuns, getCompanyId, listCompanyRuns } from "@/lib/api";
 import type { DiffResponse, ValuationRunOut } from "@/lib/types";
 import { Card, ErrorState, SectionHeading, Table } from "@/components/ui";
@@ -14,8 +14,8 @@ import { Card, ErrorState, SectionHeading, Table } from "@/components/ui";
  * GET /companies/{ticker}/id (closes the Phase 10 audit gap — no more
  * manual company_id entry).
  */
-export default function ResearchHistoryPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function ResearchHistoryPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [companyId, setCompanyId] = useState<number | "">("");
   const [resolveError, setResolveError] = useState<unknown>(null);
   const [runs, setRuns] = useState<ValuationRunOut[] | null>(null);

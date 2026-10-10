@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { ApiError, authHeaders, getCompanyId } from "@/lib/api";
 import type { AssumptionDecisionOut, AuditTrailEntryOut } from "@/lib/types";
 import { AIBadge, AIPanel, Card, ErrorState, SectionHeading } from "@/components/ui";
@@ -18,8 +18,8 @@ const BASE = () => process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ?? 
  * endpoint the Value Unlock page uses. company_id is resolved
  * automatically from the ticker via GET /companies/{ticker}/id.
  */
-export default function AiAnalystPage({ params }: { params: { ticker: string } }) {
-  const ticker = params.ticker.toUpperCase();
+export default function AiAnalystPage({ params }: { params: Promise<{ ticker: string }> }) {
+  const ticker = use(params).ticker.toUpperCase();
   const [companyId, setCompanyId] = useState<number | "">("");
   const [resolveError, setResolveError] = useState<unknown>(null);
   const [decisions, setDecisions] = useState<AssumptionDecisionOut[] | null>(null);
