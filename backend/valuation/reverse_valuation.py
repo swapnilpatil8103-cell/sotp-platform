@@ -54,7 +54,7 @@ class ReverseValuationInput(BaseModel):
     base_dcf_input: DcfInput = Field(
         ..., description="DCF input with every assumption fixed EXCEPT the one being solved for"
     )
-    target_enterprise_value: float = Field(..., description="Market-implied EV to reconcile against, e.g. market_cap + net_debt")
+    target_enterprise_value: float = Field(..., description="Market-implied EV to reconcile against, e.g. market_cap + total_debt - cash")
     solve_target: SolveTarget
     search_low: float = Field(..., description="Lower bound for the root-find search over the solved assumption")
     search_high: float = Field(..., description="Upper bound for the root-find search over the solved assumption")

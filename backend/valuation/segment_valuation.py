@@ -56,7 +56,7 @@ class SegmentDcfAssumption(BaseModel):
 
     Mirrors DcfInput but omits base_revenue (taken from the segment's own
     REPORTED revenue fact instead, never re-typed by the caller) and the
-    EV->equity bridge fields net_debt/cash/investments/minority_interest/
+    EV->equity bridge fields total_debt/cash/investments/minority_interest/
     diluted_shares_outstanding, which are not meaningful at the segment level
     -- segment valuation stops at enterprise value; SOTP (upstream of this
     module) applies the company-level bridge once across all segments.
@@ -141,7 +141,7 @@ def _value_from_dcf(segment: SegmentFacts, assumption: SegmentDcfAssumption) -> 
         terminal_growth_rate=assumption.terminal_growth_rate,
         # Segment-level EV only: bridge fields are neutralized (0) since SOTP
         # applies the company-level bridge once, upstream of this module.
-        net_debt=0.0,
+        total_debt=0.0,
         cash_and_equivalents=0.0,
         investments=0.0,
         minority_interest=0.0,

@@ -6,9 +6,9 @@ EBIT margin schedule. FCFF = NOPAT + D&A - CapEx - change in NWC. Terminal
 value uses the Gordon Growth (perpetuity growth) formula:
 TV = FCFF_(n+1) / (WACC - g). Both projected FCFF and TV are discounted to
 present value at WACC to get enterprise value. EV -> equity value bridge:
-equity value = EV - net_debt + cash + investments - minority_interest
-(net_debt already nets out cash conceptually upstream, so cash is added back
-here explicitly per the input contract -- see DcfInput field docs).
+equity value = EV - total_debt + cash + investments - minority_interest,
+where total_debt is GROSS debt (not net of cash -- cash is added back exactly
+once, via cash_and_equivalents). This matches SotpInput's bridge.
 Equity value / diluted shares = implied price per share.
 """
 
@@ -105,7 +105,7 @@ def run_dcf(inputs: DcfInput) -> DcfResult:
 
     equity_value = (
         enterprise_value
-        - inputs.net_debt
+        - inputs.total_debt
         + inputs.cash_and_equivalents
         + inputs.investments
         - inputs.minority_interest
@@ -129,7 +129,7 @@ def run_dcf(inputs: DcfInput) -> DcfResult:
         exit_ev = sum_pv_fcff + exit_tv_discounted
         exit_equity = (
             exit_ev
-            - inputs.net_debt
+            - inputs.total_debt
             + inputs.cash_and_equivalents
             + inputs.investments
             - inputs.minority_interest

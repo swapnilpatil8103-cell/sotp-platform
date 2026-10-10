@@ -77,7 +77,7 @@ def test_dcf_method_success_matches_run_dcf():
             nwc_change_pct_of_revenue=[0.01, 0.01],
             wacc=0.10,
             terminal_growth_rate=0.03,
-            net_debt=0.0,
+            total_debt=0.0,
             cash_and_equivalents=0.0,
             investments=0.0,
             minority_interest=0.0,

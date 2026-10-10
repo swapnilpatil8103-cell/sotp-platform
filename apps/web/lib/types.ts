@@ -229,7 +229,7 @@ export interface DcfInput {
   nwc_change_pct_of_revenue: number[];
   wacc: number;
   terminal_growth_rate: number;
-  net_debt: number;
+  total_debt: number;
   cash_and_equivalents: number;
   investments?: number;
   minority_interest?: number;

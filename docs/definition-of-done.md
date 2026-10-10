@@ -19,7 +19,7 @@ Status legend: **DONE** / **PARTIAL** / **NOT DONE**.
 | 12 | DCF | DONE | `valuation/dcf.py`, unit-tested (`test_valuation_dcf.py`) and exercised end-to-end against real AAPL data in `test_integration_pipeline.py`. |
 | 13 | Comps | DONE | `valuation/comps.py`, unit-tested (`test_valuation_comps.py`); router `POST /valuation/comps`. |
 | 14 | SOTP | DONE | `valuation/sotp.py`, unit-tested and exercised end-to-end in the new integration test. |
-| 15 | Net debt bridge | DONE | Explicit fields on `DcfInput`/`SotpInput` (`net_debt`/`total_debt`, `cash_and_equivalents`, `investments`); bridge arithmetic asserted in `test_integration_pipeline.py`. |
+| 15 | Net debt bridge | DONE | Explicit fields on `DcfInput`/`SotpInput` (`total_debt`, `cash_and_equivalents`, `investments`); bridge arithmetic asserted in `test_integration_pipeline.py` and a dedicated regression test in `test_valuation_dcf.py`. |
 | 16 | Minority interest | DONE | `minority_interest` field flows through both DCF and SOTP equity bridges. |
 | 17 | Corporate overhead | DONE | `SotpInput.corporate_overhead_treatment` (`direct_deduction` / `capitalized_overhead`), both paths returned in `SotpResult`. |
 | 18 | Scenarios | DONE | `valuation/scenarios.py` + `POST /scenarios/run` (bull/base/bear). |

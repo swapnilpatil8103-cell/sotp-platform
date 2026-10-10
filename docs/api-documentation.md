@@ -236,9 +236,14 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
   overhead treatments, implied price/share, conglomerate discount %).
   `400` on invalid input (e.g. length mismatches, non-positive shares).
 - **`POST /valuation/dcf`** — body: `DcfInput` (base revenue, per-year
-  growth/margin/D&A/capex/NWC schedules, WACC, terminal growth, net debt
-  bridge, diluted shares) → `DcfResult` (year-by-year projections, terminal
-  value, EV, equity value, implied price/share). `400` on invalid input
+  growth/margin/D&A/capex/NWC schedules, WACC, terminal growth, bridge
+  fields `total_debt` (gross, **not** net of cash) / `cash_and_equivalents` /
+  `investments` / `minority_interest`, diluted shares) → `DcfResult`
+  (year-by-year projections, terminal value, EV, equity value, implied
+  price/share). Equity = EV − `total_debt` + `cash_and_equivalents` +
+  `investments` − `minority_interest`. **Breaking change:** this field was
+  previously `net_debt`; a body still sending it is rejected with `422`
+  (missing `total_debt`). `400` on invalid input
   (e.g. mismatched schedule lengths — `DcfInput.validate_lengths()`).
 - **`POST /valuation/comps`** — body: `CompsInput` (peer set + multiples
   basis) → `CompsResult`. `400` on invalid input.

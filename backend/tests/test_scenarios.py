@@ -18,7 +18,7 @@ def _dcf_input(growth: float, margin: float) -> DcfInput:
         nwc_change_pct_of_revenue=[0.01] * 5,
         wacc=0.09,
         terminal_growth_rate=0.03,
-        net_debt=100,
+        total_debt=100,
         cash_and_equivalents=50,
         diluted_shares_outstanding=100,
     )

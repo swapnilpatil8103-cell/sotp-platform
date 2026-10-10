@@ -23,7 +23,7 @@ export default function DcfPage({ params }: { params: { ticker: string } }) {
   const [nwcPct, setNwcPct] = useState(0.01);
   const [wacc, setWacc] = useState(0.09);
   const [terminalGrowth, setTerminalGrowth] = useState(0.025);
-  const [netDebt, setNetDebt] = useState(5_000_000_000);
+  const [totalDebt, setTotalDebt] = useState(5_000_000_000);
   const [cash, setCash] = useState(20_000_000_000);
   const [shares, setShares] = useState(1_000_000_000);
   const [exitMultiple, setExitMultiple] = useState<number | "">("");
@@ -105,7 +105,7 @@ export default function DcfPage({ params }: { params: { ticker: string } }) {
       nwc_change_pct_of_revenue: repeat(nwcPct),
       wacc,
       terminal_growth_rate: terminalGrowth,
-      net_debt: netDebt,
+      total_debt: totalDebt,
       cash_and_equivalents: cash,
       investments: 0,
       minority_interest: 0,
@@ -139,7 +139,7 @@ export default function DcfPage({ params }: { params: { ticker: string } }) {
           <Num label="NWC change % of revenue" value={nwcPct} onChange={setNwcPct} step="0.01" />
           <Num label="WACC" value={wacc} onChange={setWacc} step="0.005" />
           <Num label="Terminal growth rate" value={terminalGrowth} onChange={setTerminalGrowth} step="0.005" />
-          <Num label="Net debt" value={netDebt} onChange={setNetDebt} />
+          <Num label="Total debt (gross, not net of cash)" value={totalDebt} onChange={setTotalDebt} />
           <Num label="Cash & equivalents" value={cash} onChange={setCash} />
           <Num label="Diluted shares outstanding" value={shares} onChange={setShares} />
           <div>

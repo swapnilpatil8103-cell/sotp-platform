@@ -22,7 +22,7 @@ def _base_dcf_kwargs() -> dict:
         nwc_change_pct_of_revenue=[0.01, 0.01],
         wacc=0.10,  # will be overridden by the row grid
         terminal_growth_rate=0.03,  # will be overridden by the col grid
-        net_debt=200.0,
+        total_debt=200.0,
         cash_and_equivalents=100.0,
         investments=0.0,
         minority_interest=0.0,

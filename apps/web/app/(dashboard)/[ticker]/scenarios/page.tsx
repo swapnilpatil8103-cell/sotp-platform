@@ -17,7 +17,7 @@ function baseDcfInput(growth: number, margin: number): DcfInput {
     nwc_change_pct_of_revenue: [0.01, 0.01, 0.01, 0.01, 0.01],
     wacc: 0.09,
     terminal_growth_rate: 0.025,
-    net_debt: 5_000_000_000,
+    total_debt: 5_000_000_000,
     cash_and_equivalents: 20_000_000_000,
     investments: 0,
     minority_interest: 0,

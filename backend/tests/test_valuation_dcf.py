@@ -51,7 +51,7 @@ def _independent_dcf(inputs: DcfInput) -> dict:
     )
     pv_tv = tv * discount_factors[-1]
     ev = sum_pv_fcff + pv_tv
-    equity = ev - inputs.net_debt + inputs.cash_and_equivalents + inputs.investments - inputs.minority_interest
+    equity = ev - inputs.total_debt + inputs.cash_and_equivalents + inputs.investments - inputs.minority_interest
     price = equity / inputs.diluted_shares_outstanding
     return {
         "fcffs": fcffs,
@@ -74,7 +74,7 @@ def _make_two_year_inputs() -> DcfInput:
         nwc_change_pct_of_revenue=[0.01, 0.01],
         wacc=0.10,
         terminal_growth_rate=0.03,
-        net_debt=200.0,
+        total_debt=200.0,
         cash_and_equivalents=100.0,
         investments=0.0,
         minority_interest=0.0,
@@ -110,9 +110,9 @@ def test_dcf_full_projection_matches_independent_recalculation():
     assert result.terminal_value_undiscounted == pytest.approx(expected["terminal_value_undiscounted"])
     assert result.terminal_value_discounted == pytest.approx(expected["terminal_value_discounted"])
 
-    # Equity value bridge sanity: equity = EV - net_debt + cash + investments - minority
+    # Equity value bridge sanity: equity = EV - total_debt + cash + investments - minority
     assert result.equity_value == pytest.approx(
-        result.enterprise_value - inputs.net_debt + inputs.cash_and_equivalents
+        result.enterprise_value - inputs.total_debt + inputs.cash_and_equivalents
         + inputs.investments - inputs.minority_interest
     )
 
@@ -129,7 +129,60 @@ def test_dcf_mismatched_schedule_lengths_raises():
             nwc_change_pct_of_revenue=[0.01, 0.01],
             wacc=0.10,
             terminal_growth_rate=0.03,
-            net_debt=0.0,
+            total_debt=0.0,
             cash_and_equivalents=0.0,
             diluted_shares_outstanding=100.0,
         ).validate_lengths()
+
+
+def _bridge_regression_inputs(**overrides) -> DcfInput:
+    """One-year forecast engineered so enterprise value is exactly 1000:
+    FCFF = EBIT = 1000 * 0.10 = 100 (no tax/D&A/capex/NWC), WACC 10%, g = 0
+    => TV = 100 / 0.10 = 1000, EV = (100 + 1000) / 1.10 = 1000. The 10x exit
+    multiple on terminal EBITDA (100) gives the same 1000 on the exit path."""
+    params = dict(
+        base_revenue=1000.0,
+        revenue_growth_rates=[0.0],
+        ebit_margins=[0.10],
+        tax_rate=0.0,
+        da_pct_of_revenue=[0.0],
+        capex_pct_of_revenue=[0.0],
+        nwc_change_pct_of_revenue=[0.0],
+        wacc=0.10,
+        terminal_growth_rate=0.0,
+        total_debt=500.0,
+        cash_and_equivalents=200.0,
+        investments=0.0,
+        minority_interest=0.0,
+        diluted_shares_outstanding=100.0,
+        exit_multiple=10.0,
+    )
+    params.update(overrides)
+    return DcfInput(**params)
+
+
+def test_dcf_bridge_does_not_double_count_cash_regression():
+    """Regression: DcfInput used to expose `net_debt` documented as "total debt
+    minus cash" while run_dcf ALSO added cash back, double-counting cash. With
+    total_debt = 500 (gross), cash = 200 and EV = 1000, equity must be
+    1000 - 500 + 200 = 700 -- on BOTH the Gordon Growth and exit-multiple paths."""
+    result = run_dcf(_bridge_regression_inputs())
+
+    assert result.enterprise_value == pytest.approx(1000.0)
+    assert result.equity_value == pytest.approx(700.0)
+    assert result.implied_price_per_share == pytest.approx(7.0)
+
+    assert result.exit_multiple_enterprise_value == pytest.approx(1000.0)
+    assert result.exit_multiple_equity_value == pytest.approx(700.0)
+    assert result.exit_multiple_implied_price_per_share == pytest.approx(7.0)
+
+
+def test_dcf_bridge_treats_total_debt_as_gross_not_net_of_cash():
+    """Equity moves one-for-one with total_debt (down) and cash (up), each
+    counted exactly once."""
+    base = run_dcf(_bridge_regression_inputs())
+    more_debt = run_dcf(_bridge_regression_inputs(total_debt=600.0))
+    more_cash = run_dcf(_bridge_regression_inputs(cash_and_equivalents=300.0))
+
+    assert more_debt.equity_value == pytest.approx(base.equity_value - 100.0)
+    assert more_cash.equity_value == pytest.approx(base.equity_value + 100.0)

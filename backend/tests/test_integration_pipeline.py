@@ -111,8 +111,10 @@ def test_full_pipeline_aapl_dcf_and_sotp(tmp_path):
         nwc_change_pct_of_revenue=[0.0] * 5,
         wacc=0.09,
         terminal_growth_rate=0.03,
-        net_debt=0.0,
-        cash_and_equivalents=0.0,
+        # Deliberately non-zero so the bridge assertion below can tell a
+        # correct bridge from a double-counting one (zeros hide both).
+        total_debt=100_000_000_000,
+        cash_and_equivalents=50_000_000_000,
         investments=0.0,
         minority_interest=0.0,
         diluted_shares_outstanding=15_000_000_000,
@@ -120,11 +122,12 @@ def test_full_pipeline_aapl_dcf_and_sotp(tmp_path):
     dcf_result = run_dcf(dcf_input)
 
     # Structural / internal-consistency assertions (not fixed numeric
-    # fixtures, since real filing data changes year over year).
+    # fixtures, since real filing data changes year over year). The bridge is
+    # asserted against literals, not the production formula: equity = EV -
+    # gross total debt + cash (cash counted exactly once).
     assert dcf_result.enterprise_value > 0
     assert dcf_result.equity_value == pytest.approx(
-        dcf_result.enterprise_value - dcf_input.net_debt + dcf_input.cash_and_equivalents
-        + dcf_input.investments - dcf_input.minority_interest,
+        dcf_result.enterprise_value - 100_000_000_000 + 50_000_000_000,
         rel=1e-6,
     )
     assert dcf_result.implied_price_per_share == pytest.approx(

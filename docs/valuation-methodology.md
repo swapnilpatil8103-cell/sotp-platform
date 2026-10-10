@@ -162,9 +162,17 @@ See `backend/valuation/dcf.py::compute_exit_multiple_terminal_value`.
 EV -> equity value bridge:
 
 ```
-equity_value = EV - net_debt + cash_and_equivalents + investments - minority_interest
+equity_value = EV - total_debt + cash_and_equivalents + investments - minority_interest
 implied_price_per_share = equity_value / diluted_shares_outstanding
 ```
+
+`total_debt` is **gross** debt, not net of cash: cash enters the bridge exactly
+once, via `cash_and_equivalents`. This is the same bridge `SotpInput` uses.
+(Earlier versions exposed this field as `net_debt`, documented as "total debt
+minus cash" while the bridge also added cash back, so a caller following the
+documentation double-counted cash. The field was renamed to `total_debt`;
+a request still sending `net_debt` now fails validation instead of silently
+computing the wrong equity value.)
 
 The result includes every year's full projection row (revenue, EBIT, NOPAT,
 D&A, CapEx, NWC change, FCFF, discount factor, discounted FCFF) for audit
@@ -293,7 +301,7 @@ surfaced to the caller/UI; it is never enforced by raising.
 ## Reverse valuation (`backend/valuation/reverse_valuation.py`)
 
 Given a DCF input with everything fixed except one assumption, and a target
-enterprise value (typically `market_cap + net_debt`), `solve_reverse_valuation`
+enterprise value (typically `market_cap + total_debt - cash`), `solve_reverse_valuation`
 uses `scipy.optimize.brentq` to find the value of that one assumption that
 reproduces the target EV. Two solve targets are supported:
 

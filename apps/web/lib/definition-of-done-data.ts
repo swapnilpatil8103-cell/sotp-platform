@@ -25,7 +25,7 @@ export const DEFINITION_OF_DONE_ITEMS: DoDItem[] = [
   { number: 12, item: "DCF", status: "DONE", note: "valuation/dcf.py, unit-tested (test_valuation_dcf.py) and exercised end-to-end against real AAPL data in test_integration_pipeline.py." },
   { number: 13, item: "Comps", status: "DONE", note: "valuation/comps.py, unit-tested (test_valuation_comps.py); router POST /valuation/comps." },
   { number: 14, item: "SOTP", status: "DONE", note: "valuation/sotp.py, unit-tested and exercised end-to-end in the new integration test." },
-  { number: 15, item: "Net debt bridge", status: "DONE", note: "Explicit fields on DcfInput/SotpInput (net_debt/total_debt, cash_and_equivalents, investments); bridge arithmetic asserted in test_integration_pipeline.py." },
+  { number: 15, item: "Net debt bridge", status: "DONE", note: "Explicit fields on DcfInput/SotpInput (total_debt, cash_and_equivalents, investments); bridge arithmetic asserted in test_integration_pipeline.py and a dedicated regression test in test_valuation_dcf.py." },
   { number: 16, item: "Minority interest", status: "DONE", note: "minority_interest field flows through both DCF and SOTP equity bridges." },
   { number: 17, item: "Corporate overhead", status: "DONE", note: "SotpInput.corporate_overhead_treatment (direct_deduction / capitalized_overhead), both paths returned in SotpResult." },
   { number: 18, item: "Scenarios", status: "DONE", note: "valuation/scenarios.py + POST /scenarios/run (bull/base/bear)." },

@@ -56,7 +56,7 @@ class DcfInput(BaseModel):
     )
     wacc: float = Field(..., description="Discount rate applied to projected FCFF and terminal value")
     terminal_growth_rate: float = Field(..., description="Perpetuity growth rate (g) used in Gordon Growth terminal value")
-    net_debt: float = Field(..., description="Total debt minus cash, for the EV->equity bridge")
+    total_debt: float = Field(..., description="Gross total debt (NOT net of cash), deducted in the EV->equity bridge")
     cash_and_equivalents: float = Field(..., description="Cash & equivalents added back in EV->equity bridge")
     investments: float = Field(0.0, description="Non-operating investments added in EV->equity bridge")
     minority_interest: float = Field(0.0, description="Minority interest deducted in EV->equity bridge")

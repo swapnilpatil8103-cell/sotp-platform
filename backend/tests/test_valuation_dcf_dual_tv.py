@@ -22,7 +22,7 @@ def _base_kwargs() -> dict:
         nwc_change_pct_of_revenue=[0.01, 0.01],
         wacc=0.10,
         terminal_growth_rate=0.03,
-        net_debt=200.0,
+        total_debt=200.0,
         cash_and_equivalents=100.0,
         investments=0.0,
         minority_interest=0.0,
@@ -78,7 +78,7 @@ def test_exit_multiple_terminal_value_computed_independently_alongside_gordon_gr
     expected_exit_ev = sum_pv_fcff + expected_exit_tv_discounted
     assert result.exit_multiple_enterprise_value == pytest.approx(expected_exit_ev)
 
-    expected_exit_equity = expected_exit_ev - inputs.net_debt + inputs.cash_and_equivalents + inputs.investments - inputs.minority_interest
+    expected_exit_equity = expected_exit_ev - inputs.total_debt + inputs.cash_and_equivalents + inputs.investments - inputs.minority_interest
     assert result.exit_multiple_equity_value == pytest.approx(expected_exit_equity)
     assert result.exit_multiple_implied_price_per_share == pytest.approx(expected_exit_equity / inputs.diluted_shares_outstanding)
 
