@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 
 from backend.api.body_limit import BodySizeLimitMiddleware
 from backend.api.deps import get_current_user
-from backend.api.routers import auth, companies, filings, market_data, segments, valuation, scenarios, memo
+from backend.api.routers import admin, auth, companies, filings, market_data, segments, valuation, scenarios, memo
 
 app = FastAPI(
     title="SOTP Intelligence API",
@@ -103,6 +103,7 @@ _AUTH = [Depends(get_current_user)]
 
 # The one other open route: exchanging credentials for a token.
 app.include_router(auth.router)
+app.include_router(admin.router, dependencies=_AUTH)
 app.include_router(companies.router, dependencies=_AUTH)
 app.include_router(market_data.router, dependencies=_AUTH)
 app.include_router(filings.router, dependencies=_AUTH)

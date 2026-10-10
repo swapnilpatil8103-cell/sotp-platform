@@ -30,7 +30,7 @@ from backend.api.deps import (
     require_admin,
 )
 from backend.db import get_session
-from backend.services import users
+from backend.services import user_admin, users
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -144,7 +144,7 @@ def change_password(
 @router.post("/revoke-sessions", response_model=RevokeSessionsResponse)
 def revoke_sessions(
     payload: RevokeSessionsRequest,
-    _admin: AuthenticatedUser = Depends(require_admin),
+    admin: AuthenticatedUser = Depends(require_admin),
     session: Session = Depends(get_session),
 ):
     """Admin only: sign ``email`` out everywhere by invalidating all of their
@@ -152,5 +152,5 @@ def revoke_sessions(
     user = users.get_user(session, payload.email)
     if user is None:
         raise HTTPException(status_code=404, detail="No such user.")
-    user = users.revoke_sessions(session, user)
+    user = user_admin.revoke_sessions(session, actor=admin.subject, user=user)  # audited
     return RevokeSessionsResponse(email=user.email, token_version=user.token_version)

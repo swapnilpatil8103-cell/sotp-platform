@@ -124,6 +124,50 @@ tokens and returns `{"email", "token_version"}`; the user can sign in again
 normally. `404` for an unknown email, `403` without the role. An admin may revoke
 themselves.
 
+### User administration (`/admin`)
+
+Every route requires the `admin` role (`403` otherwise, `401` without a token). There is
+no public sign-up; the first admin is created with
+`python scripts/create_user.py --email <e> --bootstrap-admin`, which refuses once an active
+admin exists. Roles are `analyst` and `admin`; any other value is a `422`, so a typo cannot
+create a powerless role. Admin and analyst are independent: an admin who is not also an
+analyst cannot decide assumptions or execute runs.
+
+**`UserOut`** (every response): `id, email, roles[], is_active, token_version, created_at,
+last_login_at`. Password hashes are never returned.
+
+| Route | Request | Success | Errors |
+|---|---|---|---|
+| `GET /admin/users` | `?is_active=true|false`, `limit` 1-500 (default 100), `offset` | `200 {total, users[]}` ordered by email | `422` bad paging |
+| `POST /admin/users` | `{email, password (12-1024 chars), roles[]}`, extra fields forbidden | `201 UserOut` | `409` email exists (case-insensitive); `422` weak password, invalid email, unknown role, more than 8 roles |
+| `PATCH /admin/users/{id}` | any of `{roles[], is_active, revoke_sessions}`, at least one; extra fields forbidden | `200 UserOut` | `404` unknown id; `409` last-admin rule; `422` empty body, unknown role |
+| `GET /admin/users/{id}/audit` | | `200` list of audit entries, oldest first | `404` |
+
+`roles` in a PATCH replaces the whole list (`[]` makes the account read-only). The admin
+chooses the initial password on create; the user should change it with
+`POST /auth/change-password`.
+
+**Semantics.**
+- *Deactivating* sets `is_active=false` and bumps `token_version`, so the user's tokens die
+  immediately and are not revived by reactivation (they must sign in again).
+- `revoke_sessions: true` bumps `token_version` without deactivating. `false` does nothing.
+- Roles take effect on the user's very next request (they are read from the database).
+- **Last-admin guard:** if the change would leave no *active* admin (removing the `admin`
+  role from, or deactivating, the only active admin, alone or combined with other
+  fields) the whole request is refused with `409` and nothing is changed or audited. An
+  inactive admin does not count as a spare. With another active admin present, an admin
+  may demote or deactivate themselves. Admin rows are locked (`FOR UPDATE`) while checking
+  so two admins demoting each other at once on Postgres serialise.
+- The change and its audit rows commit in one transaction; if the audit write fails the
+  change is rolled back.
+
+**Audit.** Entries have `entity_type: "AppUser"`, `entity_id` = the user's id, and
+`actor: "human:<admin email>"` (`"system"` for `scripts/create_user.py`). Actions:
+`USER_CREATED` (`email, roles`), `USER_ROLES_CHANGED` (`before, after`), `USER_DEACTIVATED`,
+`USER_REACTIVATED`, `USER_SESSIONS_REVOKED` (`reason: "requested"|"deactivated"`,
+`token_version`), `USER_PASSWORD_RESET` (CLI only). No entry is written for a no-op, and none
+ever contains a password or hash. `POST /auth/revoke-sessions` is audited the same way.
+
 ### Request limits and CORS
 
 Request bodies over `MAX_REQUEST_BODY_BYTES` (default 1048576) are answered `413`

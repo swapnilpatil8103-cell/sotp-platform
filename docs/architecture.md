@@ -300,8 +300,8 @@ no-paid-dependency principle.
   has a login endpoint with a database-backed throttle, cookie sessions, a
   per-request user lookup (roles come from `app_user`, so deactivation and
   demotion are immediate) and token versions (a password change or admin revoke
-  invalidates all earlier tokens), plus a 1 MiB body limit and strict CORS, but
-  no forgot-password flow or SSO — see the Definition-of-Done audit
+  invalidates all earlier tokens), plus admin-only user administration (`/admin/users`, audited, with a last-admin
+  guard), a 1 MiB body limit and strict CORS, but no forgot-password flow or SSO — see the Definition-of-Done audit
   (`docs/definition-of-done.md`) for the honest accounting of what's DONE vs
   PARTIAL vs NOT DONE.
 

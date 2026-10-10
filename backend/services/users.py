@@ -31,6 +31,10 @@ from backend.services.login_throttle import ThrottledError  # re-exported for ca
 
 __all__ = ["ThrottledError"]
 
+ROLE_ANALYST = "analyst"
+ROLE_ADMIN = "admin"
+ALLOWED_ROLES = frozenset({ROLE_ANALYST, ROLE_ADMIN})  # a typo must not silently create a powerless role
+
 MIN_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 1024  # bound the work an unauthenticated caller can request
 
@@ -40,6 +44,10 @@ _dummy_hash: Optional[str] = None
 
 class UserError(ValueError):
     """Invalid request to create/modify a user (e.g. weak password, duplicate)."""
+
+
+class DuplicateUserError(UserError):
+    """A user with that email already exists."""
 
 
 class WrongPasswordError(UserError):
@@ -65,6 +73,15 @@ def parse_roles(roles: str) -> list[str]:
     return sorted({r.strip() for r in roles.split(",") if r.strip()})
 
 
+def validate_roles(roles) -> list[str]:
+    """Normalise a role collection (dedupe, sort) and reject unknown names."""
+    cleaned = sorted({str(r).strip() for r in roles if str(r).strip()})
+    unknown = [r for r in cleaned if r not in ALLOWED_ROLES]
+    if unknown:
+        raise UserError(f"Unknown role(s) {unknown}; allowed roles are {sorted(ALLOWED_ROLES)}.")
+    return cleaned
+
+
 def check_password_policy(password: str) -> None:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise UserError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
@@ -72,17 +89,30 @@ def check_password_policy(password: str) -> None:
         raise UserError(f"Password must be at most {MAX_PASSWORD_LENGTH} characters.")
 
 
-def create_user(session: Session, email: str, password: str, roles: list[str] | tuple[str, ...] = ()) -> AppUser:
+def create_user(
+    session: Session,
+    email: str,
+    password: str,
+    roles: list[str] | tuple[str, ...] = (),
+    *,
+    commit: bool = True,
+) -> AppUser:
+    """Create a user. With ``commit=False`` the row is only flushed (it has an id),
+    so the caller can add an audit entry and commit both together."""
     email = normalize_email(email)
     if "@" not in email or len(email) > 254:
         raise UserError("A valid email address is required.")
     check_password_policy(password)
+    cleaned_roles = validate_roles(roles)
     if session.exec(select(AppUser).where(AppUser.email == email)).first() is not None:
-        raise UserError(f"A user with email {email} already exists.")
-    user = AppUser(email=email, password_hash=hash_password(password), roles=",".join(sorted(set(roles))))
+        raise DuplicateUserError(f"A user with email {email} already exists.")
+    user = AppUser(email=email, password_hash=hash_password(password), roles=",".join(cleaned_roles))
     session.add(user)
-    session.commit()
-    session.refresh(user)
+    if commit:
+        session.commit()
+        session.refresh(user)
+    else:
+        session.flush()
     return user
 
 

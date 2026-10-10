@@ -40,6 +40,23 @@ ACTION_DECISION_RECORDED = "DECISION_RECORDED"
 ACTION_VALUATION_RUN_EXECUTED = "VALUATION_RUN_EXECUTED"
 ACTION_DATA_INGESTED = "DATA_INGESTED"
 
+# User administration (entity_type "AppUser"). The actor is the acting admin
+# ("human:<email>") or "system" for the command-line tools.
+ACTION_USER_CREATED = "USER_CREATED"
+ACTION_USER_ROLES_CHANGED = "USER_ROLES_CHANGED"
+ACTION_USER_DEACTIVATED = "USER_DEACTIVATED"
+ACTION_USER_REACTIVATED = "USER_REACTIVATED"
+ACTION_USER_SESSIONS_REVOKED = "USER_SESSIONS_REVOKED"
+ACTION_USER_PASSWORD_RESET = "USER_PASSWORD_RESET"
+USER_ADMIN_ACTIONS = (
+    ACTION_USER_CREATED,
+    ACTION_USER_ROLES_CHANGED,
+    ACTION_USER_DEACTIVATED,
+    ACTION_USER_REACTIVATED,
+    ACTION_USER_SESSIONS_REVOKED,
+    ACTION_USER_PASSWORD_RESET,
+)
+
 # For each action, which conceptual role (of the CLAIM/SOURCE/INPUT/
 # CALCULATION/OUTPUT/AI_INTERPRETATION chain) the event primarily represents.
 # Used only to annotate retrieval output -- purely descriptive.
@@ -48,6 +65,7 @@ EVENT_ROLE = {
     ACTION_AI_PROPOSAL_GENERATED: "AI_INTERPRETATION",
     ACTION_DECISION_RECORDED: "INPUT",
     ACTION_VALUATION_RUN_EXECUTED: "CALCULATION_AND_OUTPUT",
+    **{action: "ADMINISTRATION" for action in USER_ADMIN_ACTIONS},
 }
 
 
@@ -59,8 +77,13 @@ def log_event(
     action: str,
     actor: str,
     detail: Optional[dict[str, Any]] = None,
+    commit: bool = True,
 ) -> AuditLogEntry:
-    """Write one immutable audit entry. Returns the persisted row."""
+    """Write one immutable audit entry. Returns the persisted row.
+
+    With ``commit=False`` the row is only flushed into the caller's open
+    transaction, so a change and the audit entry describing it commit (or roll
+    back) together; the caller must commit."""
     entry = AuditLogEntry(
         entity_type=entity_type,
         entity_id=entity_id,
@@ -69,8 +92,11 @@ def log_event(
         detail=detail or {},
     )
     session.add(entry)
-    session.commit()
-    session.refresh(entry)
+    if commit:
+        session.commit()
+        session.refresh(entry)
+    else:
+        session.flush()
     return entry
 
 

@@ -86,10 +86,12 @@ Signing in (web app and API):
 # 1. Put a signing secret (>= 32 chars) in .env, then restart the backend.
 python -c "import secrets; print(secrets.token_urlsafe(48))"   # -> AUTH_JWT_SECRET=...
 
-# 2. Apply migrations (creates the app_user table) and create a login.
+# 2. Apply migrations (creates the app_user table) and create the FIRST ADMIN.
 #    There is no sign-up page; the password is read from a hidden prompt.
 alembic -c backend/alembic.ini upgrade head
-python scripts/create_user.py --email you@example.com --roles analyst
+python scripts/create_user.py --email you@example.com --bootstrap-admin
+#    (an admin + analyst; refused once any active admin exists. Everyone else is
+#    created by an admin through the API below, or with --roles analyst.)
 
 # 3. Open http://localhost:3000 and sign in, or use the API directly:
 curl -s -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" \
@@ -181,8 +183,29 @@ CORS allows only `GET POST PUT PATCH DELETE OPTIONS` and the `Authorization`,
 `*` (or `https://*.example.com`) makes the server refuse to start, because
 credentials are allowed.
 
-**Not built yet:** a forgot-password / reset-by-email flow, a user-admin page, MFA
-or SSO. Tokens issued before the token-version change are rejected (sign in
+**User administration (admin role only).** There is no public sign-up. Roles are
+`analyst` (record decisions, run valuations) and `admin`; they are separate, so an
+admin cannot decide or run unless also an analyst. Admins manage accounts through:
+
+| Endpoint | Does |
+|---|---|
+| `GET /admin/users` | list users (`?is_active=`, `limit`, `offset`); never any password data |
+| `POST /admin/users` | create `{email, password, roles}` (201; 409 if the email exists; unknown roles are 422) |
+| `PATCH /admin/users/{id}` | any of `roles` (replaces the list), `is_active`, `revoke_sessions` |
+| `GET /admin/users/{id}/audit` | that account's administrative history |
+
+Deactivating a user also revokes their sessions, so reactivating them later does not
+resurrect old tokens. Every change is written to the audit log (`entity_type`
+`AppUser`) with the acting admin as actor (`human:<email>`; `system` for the
+command-line tools), in the same transaction as the change, and never contains
+passwords. **The last active admin cannot remove their own admin role or deactivate
+themselves** (`409`): the rule counts the admins that would remain after the change,
+so it also covers combined edits. With a second active admin, an admin may demote or
+deactivate themselves. A new user's initial password is chosen by the admin and
+should be changed at once at `/account`.
+
+**Not built yet:** a forgot-password / reset-by-email flow, an admin web page (the
+API above exists), MFA or SSO. Tokens issued before the token-version change are rejected (sign in
 again). The interactive docs (`/docs`, `/openapi.json`) remain open, and each
 request costs one indexed user lookup.
 
@@ -327,8 +350,8 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
 
 ## Status
 
-All 10 phases complete as scoped. Backend: 684 unit/router tests +
-12 integration tests (real SEC EDGAR calls, `-m integration`), 696 in total, all passing.
+All 10 phases complete as scoped. Backend: 749 unit/router tests +
+12 integration tests (real SEC EDGAR calls, `-m integration`), 761 in total, all passing.
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
 is PARTIAL: login, sessions and live user checks built; no password reset or SSO). CI and containers are in place (see "CI and containers" below; item 40 is
