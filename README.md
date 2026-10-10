@@ -41,8 +41,7 @@ backend/            FastAPI backend (api, models, services, valuation, ai, gover
 packages/shared-types/  TypeScript types shared across frontend (and future services)
 data/cache/         Local cache for SEC/market data responses (gitignored contents)
 docs/               Architecture, data model, valuation methodology, AI governance, API docs
-scripts/            Operational / dev scripts (empty in Phase 1)
-tests/              Top-level integration tests (empty in Phase 1)
+scripts/            Dev scripts (`mint_dev_token.py` mints a JWT for local use)
 ```
 
 ## Running locally
@@ -202,8 +201,8 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
 
 ## Status
 
-All 10 phases complete as scoped. Backend: 155 unit/router tests +
-5 integration tests (real SEC EDGAR calls, `-m integration`), all passing.
+All 10 phases complete as scoped. Backend: 531 unit/router tests +
+12 integration tests (real SEC EDGAR calls, `-m integration`), 543 in total, all passing.
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
 is PARTIAL: no login flow yet). Deployment configs and CI were not built — see

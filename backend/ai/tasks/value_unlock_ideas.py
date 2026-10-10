@@ -73,7 +73,7 @@ def _build_prompt(sotp_breakdown: dict[str, Any], conglomerate_discount_pct: Opt
         "yourself -- only propose the action type, which segment (if applicable), and a "
         "qualitative rationale.\n\n"
         f"SOTP breakdown: {sotp_breakdown}\n"
-        f"Conglomerate discount/premium (%): {conglomerate_discount_pct}\n\n"
+        f"Conglomerate discount (%; positive = market trades below SOTP value, negative = premium): {conglomerate_discount_pct}\n\n"
         'Reply as strict JSON: {"ideas": [{"action_type": "spin_off", "target_segment": '
         '"...", "rationale": "..."}, ...]}'
     )

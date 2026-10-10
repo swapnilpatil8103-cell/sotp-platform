@@ -152,6 +152,18 @@ discounted to present value at `WACC`, summed to enterprise value:
 EV = sum(FCFF_i / (1+WACC)^i) + TV / (1+WACC)^n
 ```
 
+**Mid-year convention (optional).** `DcfInput.mid_year_convention` (default
+`false`, which leaves every output unchanged) assumes cash flows arrive evenly
+through each year: FCFF_i is discounted at `i - 0.5` and the Gordon Growth
+terminal value at `n - 0.5`:
+
+```
+EV = sum(FCFF_i / (1+WACC)^(i-0.5)) + TV / (1+WACC)^(n-0.5)
+```
+
+With the Gordon method this lifts EV by exactly `(1+WACC)^0.5`. The optional
+Exit Multiple terminal value is a year-end sale price and stays discounted at `n`.
+
 **Dual terminal value (optional Exit Multiple method).** `DcfInput.exit_multiple`
 is an optional, explicit caller-supplied input (never defaulted/inferred). When
 supplied, an independent Exit Multiple terminal value is computed *alongside*
@@ -270,13 +282,19 @@ equity_value_capitalized_overhead = equity_value_direct_deduction - capitalized_
 `equity_value` is whichever of the two the caller selects via
 `corporate_overhead_treatment`. Implied price per share divides by diluted
 shares outstanding. If a current market share price is supplied, the
-conglomerate discount/premium (equivalently, upside/downside) is:
+two distinct figures are reported:
 
 ```
-pct = (implied_price_per_share - current_share_price) / current_share_price * 100
+upside_downside_pct       = (implied_price_per_share - current_share_price) / current_share_price  * 100
+conglomerate_discount_pct = (implied_price_per_share - current_share_price) / implied_price_per_share * 100
 ```
 
-(negative = trading at a discount to the SOTP-implied value).
+Upside/downside is measured against the market price; the conglomerate
+discount is measured against the SOTP-implied price. Sign convention for the
+discount: **positive = the market trades below SOTP value (a discount);
+negative = it trades above (a premium)**. It is `None` if there is no market
+price or the implied price is not positive. Example: implied $11, market $10
+gives upside +10.0% and discount +9.09%.
 
 ### 5. Sensitivity analysis (`backend/valuation/sensitivity.py`)
 

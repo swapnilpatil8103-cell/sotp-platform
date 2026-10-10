@@ -159,7 +159,8 @@ Applied to Google Cloud's revenue ($58.71B): **$410.9B**.
 | ÷ Diluted shares outstanding | 12,088,000,000 |
 | **Implied price per share** | **$274.10** |
 | Current market price | $338.50 |
-| **Conglomerate discount/(premium)** | **-19.0%** (negative = market trades at a premium to SOTP) |
+| **Upside/(downside) to SOTP** | **-19.0%** (implied $274.10 vs market $338.50) |
+| **Conglomerate discount/(premium)** | **-23.5%** (negative = market trades at a 23.5% premium to SOTP value) |
 
 *Note on corporate overhead:* Alphabet does not separately break out an "Alphabet-level unallocated costs" line in the XBRL data pulled here. I used a placeholder assumption ($5B annual, 8x capitalization multiple for the alternate treatment) rather than fabricate a REPORTED figure — under the capitalized-overhead treatment, equity value would be $3,273.3B ($270.72/share), a ~1.2% difference from the direct-deduction figure shown above. This is disclosed, not buried.
 

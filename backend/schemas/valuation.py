@@ -98,6 +98,17 @@ class DcfInput(BaseModel):
         ),
     )
 
+    mid_year_convention: bool = Field(
+        False,
+        description=(
+            "If true, each year's FCFF is discounted at t - 0.5 (cash flows arrive evenly through the "
+            "year) instead of t, and the Gordon Growth terminal value is discounted at N - 0.5 to match "
+            "(equivalent to TV * (1 + wacc)^0.5 discounted at N). The Exit Multiple terminal value is a "
+            "year-end sale price and stays discounted at N. Default false: end-of-year discounting, "
+            "output identical to before this flag existed."
+        ),
+    )
+
     def validate_lengths(self) -> None:
         n = len(self.revenue_growth_rates)
         for name, seq in (
@@ -262,9 +273,16 @@ class SotpResult(BaseModel):
     equity_value: float = Field(..., description="Equity value under the selected corporate_overhead_treatment")
     implied_price_per_share: float
     conglomerate_discount_pct: Optional[float] = Field(
-        None, description="(implied - market) / market * 100 relative to current_share_price; negative = trading at a discount to SOTP"
+        None,
+        description=(
+            "(implied - market) / implied * 100: the market's discount to the SOTP-implied price. "
+            "Positive = market trades BELOW SOTP value (discount); negative = ABOVE it (premium). "
+            "None without a current_share_price or when the implied price is not positive."
+        ),
     )
-    upside_downside_pct: Optional[float] = Field(None, description="(implied - market) / market * 100; identical figure, named for the upside/downside framing")
+    upside_downside_pct: Optional[float] = Field(
+        None, description="(implied - market) / market * 100: move from the market price needed to reach SOTP value"
+    )
 
 
 # --------------------------------------------------------------------------

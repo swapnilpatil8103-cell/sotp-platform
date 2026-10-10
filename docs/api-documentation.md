@@ -278,7 +278,7 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
 - **`POST /valuation/sotp`** — body: `SotpInput` (segments with EV +
   ownership %, cash, debt, minority interest, overhead treatment, diluted
   shares) → `SotpResult` (segment attributed EVs, equity value under both
-  overhead treatments, implied price/share, conglomerate discount %).
+  overhead treatments, implied price/share, conglomerate discount % = (implied - market) / implied, positive = market below SOTP; plus upside/downside % vs market).
   `400` on invalid input (e.g. length mismatches, non-positive shares).
 - **`POST /valuation/dcf`** — body: `DcfInput` (base revenue, per-year
   growth/margin/D&A/capex/NWC schedules, WACC, terminal growth, bridge
@@ -294,6 +294,9 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
   more than 100% a year); every `ebit_margins` entry in `[-5, 1]`;
   `terminal_growth_rate` in `(-1, 1]`; `exit_multiple`, if given, in
   `(0, 1000]`; `diluted_shares_outstanding > 0`; no `NaN`/`Infinity`.
+  Optional `mid_year_convention` (bool, default `false`) discounts FCFF at
+  `t - 0.5` and the Gordon terminal value at `N - 0.5`; the exit-multiple
+  terminal value stays at `N`. Omitting it changes nothing.
   `400` when the inputs pass validation but cannot be computed: mismatched
   schedule lengths (`DcfInput.validate_lengths()`), `wacc <= terminal_growth_rate`,
   an arithmetic failure (`ZeroDivisionError` / `OverflowError`, e.g. `wacc`

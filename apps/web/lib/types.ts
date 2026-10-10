@@ -235,6 +235,8 @@ export interface DcfInput {
   minority_interest?: number;
   diluted_shares_outstanding: number;
   exit_multiple?: number | null;
+  /** Discount FCFF at t-0.5 (and Gordon TV at N-0.5). Default false. */
+  mid_year_convention?: boolean;
 }
 
 export interface DcfYearProjection {
@@ -362,6 +364,7 @@ export interface SotpResult {
   equity_value_capitalized_overhead: number;
   equity_value: number;
   implied_price_per_share: number;
+  /** (implied - market) / implied * 100. Positive = market below SOTP (discount); negative = premium. */
   conglomerate_discount_pct?: number | null;
   upside_downside_pct?: number | null;
 }

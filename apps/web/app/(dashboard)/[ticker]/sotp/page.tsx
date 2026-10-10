@@ -261,7 +261,7 @@ export default function SotpPage({ params }: { params: Promise<{ ticker: string 
             <MetricCard label="Equity Value" value={fmt(result.equity_value)} tone="success" />
             <MetricCard label="Implied Price/Share" value={`$${result.implied_price_per_share.toFixed(2)}`} />
             <MetricCard
-              label="Conglomerate Discount"
+              label="Conglomerate Discount (+) / Premium (-)"
               value={result.conglomerate_discount_pct != null ? `${result.conglomerate_discount_pct.toFixed(1)}%` : "N/A (no market price)"}
               tone={
                 result.conglomerate_discount_pct != null

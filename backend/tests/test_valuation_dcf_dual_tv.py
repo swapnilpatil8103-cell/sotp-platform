@@ -84,3 +84,56 @@ def test_exit_multiple_terminal_value_computed_independently_alongside_gordon_gr
 
     # Exit-multiple EV differs from Gordon Growth EV (independent methods, not the same number).
     assert result.exit_multiple_enterprise_value != pytest.approx(result.enterprise_value)
+
+
+# --------------------------------------------------------------------------
+# mid_year_convention
+# --------------------------------------------------------------------------
+
+
+def test_mid_year_convention_defaults_off_and_matches_explicit_false():
+    default = run_dcf(DcfInput(**_base_kwargs()))
+    explicit = run_dcf(DcfInput(**_base_kwargs(), mid_year_convention=False))
+
+    assert DcfInput(**_base_kwargs()).mid_year_convention is False
+    assert default.enterprise_value == explicit.enterprise_value
+    assert [p.discount_factor for p in default.projections] == [1 / 1.1, 1 / 1.1**2]
+
+
+def test_mid_year_convention_hand_calculated():
+    base = run_dcf(DcfInput(**_base_kwargs()))
+    mid = run_dcf(DcfInput(**_base_kwargs(), mid_year_convention=True))
+
+    # Discount periods are 0.5 and 1.5.
+    assert mid.projections[0].discount_factor == pytest.approx(1 / 1.1**0.5)
+    assert mid.projections[1].discount_factor == pytest.approx(1 / 1.1**1.5)
+    # FCFFs themselves are unaffected.
+    assert [p.fcff for p in mid.projections] == [p.fcff for p in base.projections]
+
+    # Gordon TV (undiscounted) is unchanged; its PV uses N - 0.5.
+    assert mid.terminal_value_undiscounted == pytest.approx(base.terminal_value_undiscounted)
+    assert mid.terminal_value_discounted == pytest.approx(base.terminal_value_undiscounted / 1.1**1.5)
+
+    expected_ev = sum(p.fcff / 1.1 ** (i + 0.5) for i, p in enumerate(base.projections)) + mid.terminal_value_discounted
+    assert mid.enterprise_value == pytest.approx(expected_ev)
+    # Every flow is pulled forward half a year, so value rises by exactly (1 + wacc)^0.5.
+    assert mid.enterprise_value == pytest.approx(base.enterprise_value * 1.1**0.5)
+    assert mid.equity_value == pytest.approx(mid.enterprise_value - 200.0 + 100.0)
+
+
+def test_mid_year_convention_exit_multiple_tv_stays_year_end():
+    base = run_dcf(DcfInput(**_base_kwargs(), exit_multiple=8.0))
+    mid = run_dcf(DcfInput(**_base_kwargs(), exit_multiple=8.0, mid_year_convention=True))
+
+    assert mid.exit_multiple_terminal_value_undiscounted == pytest.approx(base.exit_multiple_terminal_value_undiscounted)
+    assert mid.exit_multiple_terminal_value_discounted == pytest.approx(base.exit_multiple_terminal_value_discounted)
+    pv_fcff_mid = sum(p.discounted_fcff for p in mid.projections)
+    assert mid.exit_multiple_enterprise_value == pytest.approx(pv_fcff_mid + base.exit_multiple_terminal_value_discounted)
+
+
+def test_exit_multiple_output_unchanged_by_discount_refactor_when_flag_off():
+    r = run_dcf(DcfInput(**_base_kwargs(), exit_multiple=8.0))
+    final = r.projections[-1]
+    assert r.exit_multiple_terminal_value_discounted == pytest.approx(
+        r.exit_multiple_terminal_value_undiscounted * final.discount_factor
+    )

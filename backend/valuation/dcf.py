@@ -10,6 +10,11 @@ equity value = EV - total_debt + cash + investments - minority_interest,
 where total_debt is GROSS debt (not net of cash -- cash is added back exactly
 once, via cash_and_equivalents). This matches SotpInput's bridge.
 Equity value / diluted shares = implied price per share.
+
+Discounting is end-of-year (period t) by default. With
+``mid_year_convention=True`` the year-t FCFF is discounted at t - 0.5 and the
+Gordon Growth terminal value at N - 0.5 (it is a perpetuity of mid-year flows);
+the Exit Multiple terminal value, a year-end sale price, stays at N.
 """
 
 from __future__ import annotations
@@ -117,7 +122,8 @@ def _run_dcf(inputs: DcfInput) -> DcfResult:
             tax_rate=inputs.tax_rate,
             year_index=year_index,
         )
-        discount_factor = 1.0 / ((1 + inputs.wacc) ** year_index)
+        discount_period = year_index - 0.5 if inputs.mid_year_convention else year_index
+        discount_factor = 1.0 / ((1 + inputs.wacc) ** discount_period)
         proj.discount_factor = discount_factor
         proj.discounted_fcff = proj.fcff * discount_factor
         projections.append(proj)
@@ -153,7 +159,9 @@ def _run_dcf(inputs: DcfInput) -> DcfResult:
         final_year = projections[-1]
         terminal_year_ebitda = final_year.ebit + final_year.da
         exit_tv_undiscounted = compute_exit_multiple_terminal_value(terminal_year_ebitda, inputs.exit_multiple)
-        exit_tv_discounted = exit_tv_undiscounted * final_year.discount_factor
+        # Year-end sale price: always discounted a full N periods, even under the
+        # mid-year convention (final_year.discount_factor would be N - 0.5).
+        exit_tv_discounted = exit_tv_undiscounted / ((1 + inputs.wacc) ** n_years)
         exit_ev = sum_pv_fcff + exit_tv_discounted
         exit_equity = (
             exit_ev

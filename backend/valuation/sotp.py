@@ -14,9 +14,20 @@ so the caller can see both regardless of which one is "selected".
                  - total_debt - minority_interest - corporate_liabilities
                  [- corporate_overhead_annual * overhead_capitalization_multiple]  (capitalized_overhead only)
 
-Also computes the conglomerate discount/premium and upside/downside vs. an
-optional current market share price -- pure arithmetic:
-    pct = (implied_price - market_price) / market_price * 100
+Also computes, against an optional current market share price (pure
+arithmetic, two different denominators on purpose):
+
+    upside_downside_pct      = (implied - market) / market  * 100
+    conglomerate_discount_pct = (implied - market) / implied * 100
+
+upside/downside answers "how far could the stock move to reach SOTP value"
+(base = market price). The conglomerate discount is the market's discount to
+the sum of the parts (base = SOTP-implied price), the conventional definition.
+Sign: POSITIVE = market trades below SOTP value (a discount); NEGATIVE = market
+trades above it (a premium). It is None when there is no market price or when
+the implied price is not positive (a discount to a non-positive value is
+undefined). Worked example: implied 11, market 10 -> upside +10.0%, discount
++9.09%; implied 8.5, market 10 -> upside -15.0%, discount -17.65% (premium).
 """
 
 from __future__ import annotations
@@ -47,9 +58,10 @@ def run_sotp(inputs: SotpInput) -> SotpResult:
     conglomerate_discount_pct = None
     upside_downside_pct = None
     if inputs.current_share_price:
-        pct = (implied_price_per_share - inputs.current_share_price) / inputs.current_share_price * 100
-        conglomerate_discount_pct = pct
-        upside_downside_pct = pct
+        gap = implied_price_per_share - inputs.current_share_price
+        upside_downside_pct = gap / inputs.current_share_price * 100
+        if implied_price_per_share > 0:
+            conglomerate_discount_pct = gap / implied_price_per_share * 100
 
     return SotpResult(
         inputs=inputs,

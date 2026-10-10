@@ -74,9 +74,10 @@ def test_conglomerate_discount_and_upside_direct_deduction():
     result = run_sotp(inputs)
 
     # implied price = 11.0, current market price = 10.0
-    # pct = (11 - 10) / 10 * 100 = 10%
-    assert result.conglomerate_discount_pct == pytest.approx(10.0)
+    # upside = (11 - 10) / 10 * 100 = 10%; discount = (11 - 10) / 11 * 100
     assert result.upside_downside_pct == pytest.approx(10.0)
+    assert result.conglomerate_discount_pct == pytest.approx(100 / 11)
+    assert result.conglomerate_discount_pct != pytest.approx(result.upside_downside_pct)
 
 
 def test_conglomerate_discount_capitalized_overhead_is_negative():
@@ -84,8 +85,19 @@ def test_conglomerate_discount_capitalized_overhead_is_negative():
     result = run_sotp(inputs)
 
     # implied price = 8.5, current market price = 10.0
-    # pct = (8.5 - 10) / 10 * 100 = -15%
-    assert result.conglomerate_discount_pct == pytest.approx(-15.0)
+    # upside = (8.5 - 10) / 10 = -15%; discount = (8.5 - 10) / 8.5 = -17.65% (a premium)
+    assert result.upside_downside_pct == pytest.approx(-15.0)
+    assert result.conglomerate_discount_pct == pytest.approx(-150 / 8.5)
+
+
+def test_conglomerate_discount_none_when_implied_price_not_positive():
+    kwargs = _base_kwargs("direct_deduction")
+    kwargs["total_debt"] = 5000.0  # equity value goes negative
+    result = run_sotp(SotpInput(**kwargs))
+
+    assert result.implied_price_per_share < 0
+    assert result.conglomerate_discount_pct is None
+    assert result.upside_downside_pct is not None
 
 
 def test_no_current_price_leaves_discount_fields_none():
