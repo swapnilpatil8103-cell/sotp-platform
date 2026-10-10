@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState, use } from "react";
-import { ApiError, authHeaders, getCompanyId } from "@/lib/api";
+import { API_BASE_URL, ApiError, getCompanyId } from "@/lib/api";
 import type { AssumptionDecisionOut, AuditTrailEntryOut } from "@/lib/types";
 import { AIBadge, AIPanel, Card, ErrorState, SectionHeading } from "@/components/ui";
 
-const BASE = () => process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ?? "http://localhost:8000";
+const BASE = () => API_BASE_URL;
 
 /**
  * AI Analyst panel (NOT a chatbot): surfaces every AI-recommended
@@ -53,7 +53,7 @@ export default function AiAnalystPage({ params }: { params: Promise<{ ticker: st
     setError(null);
     setDecisions(null);
     try {
-      const res = await fetch(`${BASE()}/valuation/company/${companyId}/assumptions`, { headers: authHeaders() });
+      const res = await fetch(`${BASE()}/valuation/company/${companyId}/assumptions`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new ApiError(res.status, body.detail ?? "Failed to load assumptions", body.detail);
@@ -71,7 +71,7 @@ export default function AiAnalystPage({ params }: { params: Promise<{ ticker: st
     setExpanded((prev) => ({ ...prev, [id]: isOpen ? null : mode }));
     if (mode === "evidence" && !isOpen && !evidence[id]) {
       try {
-        const res = await fetch(`${BASE()}/valuation/company/${companyId}/audit-trail`, { headers: authHeaders() });
+        const res = await fetch(`${BASE()}/valuation/company/${companyId}/audit-trail`);
         if (res.ok) {
           const all: AuditTrailEntryOut[] = await res.json();
           setEvidence((prev) => ({ ...prev, [id]: all.filter((e) => e.entity_id === id) }));
@@ -86,7 +86,7 @@ export default function AiAnalystPage({ params }: { params: Promise<{ ticker: st
     try {
       await fetch(`${BASE()}/valuation/assumptions/${id}/decide`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision: "REJECT", reason: "Challenged from AI Analyst panel" }),
       });
       load();

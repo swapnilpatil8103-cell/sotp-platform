@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.api.deps import get_current_user
-from backend.api.routers import companies, filings, market_data, segments, valuation, scenarios, memo
+from backend.api.routers import auth, companies, filings, market_data, segments, valuation, scenarios, memo
 
 app = FastAPI(
     title="SOTP Intelligence API",
@@ -63,10 +63,12 @@ def health():
 
 # Every router requires a valid Bearer token. Applying the dependency here, at
 # include time, protects every current and future route in these routers by
-# default; /health above is the only open endpoint. Endpoints that record a
+# default; /health above and /auth/login are the only open endpoints. Endpoints that record a
 # decision or execute a run add a role check on top (see valuation.py).
 _AUTH = [Depends(get_current_user)]
 
+# The one other open route: exchanging credentials for a token.
+app.include_router(auth.router)
 app.include_router(companies.router, dependencies=_AUTH)
 app.include_router(market_data.router, dependencies=_AUTH)
 app.include_router(filings.router, dependencies=_AUTH)

@@ -8,8 +8,8 @@ default `{"detail": "..."}` shape unless noted.
 
 ## Base URL
 
-`http://localhost:8000` in local development. The frontend reads this from
-`NEXT_PUBLIC_API_BASE_URL` (see top-level `README.md`).
+`http://localhost:8000` in local development. The web app does not call it
+from the browser; its Next.js server proxies requests (`API_BASE_URL`, see top-level `README.md`).
 
 ## Conventions
 
@@ -41,7 +41,7 @@ default `{"detail": "..."}` shape unless noted.
 
 ## Authentication
 
-Every endpoint **except `GET /health`** requires
+Every endpoint **except `GET /health` and `POST /auth/login`** requires
 `Authorization: Bearer <JWT>`. The auth dependency
 (`backend/api/deps.py::get_current_user`) is attached to each router in
 `main.py` at `include_router` time, so every route in those routers — including
@@ -51,8 +51,34 @@ routes added later — is protected by default.
 Required claims: `sub` (non-empty string, at most 256 characters — it is
 written into `decided_by` / `created_by`) and `exp`. Optional: `roles`, a list
 of strings. The algorithm is pinned server-side; unsigned (`alg: none`) and
-differently-signed tokens are rejected. Until a login flow exists, mint tokens
-with `python scripts/mint_dev_token.py --sub <id> [--roles analyst] [--hours N]`.
+differently-signed tokens are rejected. Users get tokens from `POST /auth/login`
+(below); `python scripts/mint_dev_token.py --sub <id> [--roles analyst] [--hours N]`
+mints one for scripts.
+
+### `POST /auth/login`
+
+Open. Body: `{"email": "...", "password": "..."}` (extra fields are a `422`; email
+at most 254 characters, password 1-1024). Success (`200`):
+`{"access_token", "token_type": "bearer", "expires_in": 3600, "subject", "roles"}`.
+The token's `sub` is the user's lower-cased email and `roles` come from the user
+row. Lifetime is `AUTH_TOKEN_MINUTES` (default 60, clamped to 1..1440).
+
+| Status | When |
+|---|---|
+| `401` | Unknown email, wrong password or disabled account; identical body `{"detail": "Invalid email or password."}`. |
+| `429` | Five failed attempts for that email within 15 minutes; `Retry-After` gives the seconds left (in-memory, per process). |
+| `503` | `AUTH_JWT_SECRET` is unset or too short. |
+
+Users are created with `scripts/create_user.py` (there is no sign-up endpoint);
+passwords are stored as Argon2id hashes in `app_user`.
+
+### Separation of duties
+
+`POST /valuation/assumptions/propose` records the caller as `proposed_by` (returned
+on every `AssumptionDecisionOut`). `POST /valuation/assumptions/{id}/decide` answers
+`403` ("a different user must decide it") when the caller is the proposer, compared
+case-insensitively, whatever the decision; the proposal stays `PENDING`. Proposals
+with no recorded proposer (created before the column existed) are not blocked.
 
 | Status | When |
 |---|---|

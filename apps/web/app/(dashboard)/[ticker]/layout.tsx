@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SessionBar } from "@/components/session-bar";
 
 const NAV_ITEMS: { href: string; label: string; index: number }[] = [
   { href: "", label: "Overview", index: 1 },
@@ -36,13 +37,16 @@ export default async function TickerLayout({
           <Link href="/" className="text-sm font-semibold tracking-tight text-[#0B1F3A]">
             SOTP INTELLIGENCE
           </Link>
-          <div className="flex items-center gap-2">
-            <span className="text-xs uppercase tracking-wide text-[#111827]/40">
-              Company
-            </span>
-            <span className="rounded-[6px] bg-[#0B1F3A] px-2.5 py-1 text-sm font-semibold text-white">
-              {ticker}
-            </span>
+          <div className="flex items-center gap-6">
+            <SessionBar />
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wide text-[#111827]/40">
+                Company
+              </span>
+              <span className="rounded-[6px] bg-[#0B1F3A] px-2.5 py-1 text-sm font-semibold text-white">
+                {ticker}
+              </span>
+            </div>
           </div>
         </div>
       </header>

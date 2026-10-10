@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, use } from "react";
-import { ApiError, authHeaders } from "@/lib/api";
+import { API_BASE_URL, ApiError } from "@/lib/api";
 import type { RiskDashboardResult } from "@/lib/types";
 import { AIBadge, Card, ErrorState, RiskBadge, SectionHeading } from "@/components/ui";
 
@@ -30,7 +30,7 @@ export default function RisksPage({ params }: { params: Promise<{ ticker: string
     setLoading(true);
     setError(null);
     setResult(null);
-    const base = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ?? "http://localhost:8000";
+    const base = API_BASE_URL;
     const qp = new URLSearchParams({
       coverage_pct: String(coverage),
       methodologies_used: String(methodologies),
@@ -42,7 +42,7 @@ export default function RisksPage({ params }: { params: Promise<{ ticker: string
     try {
       const res = await fetch(`${base}/scenarios/risk-dashboard?${qp.toString()}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ticker }),
       });
       if (!res.ok) {

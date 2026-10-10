@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, use } from "react";
-import { ApiError, authHeaders } from "@/lib/api";
+import { API_BASE_URL, ApiError } from "@/lib/api";
 import type { DcfInput, ReverseValuationResult } from "@/lib/types";
 import { Card, ClassificationBadge, ErrorState, MetricCard, SectionHeading } from "@/components/ui";
 
@@ -41,11 +41,11 @@ export default function ReverseValuationPage({ params }: { params: Promise<{ tic
     setLoading(true);
     setError(null);
     setResult(null);
-    const base = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ?? "http://localhost:8000";
+    const base = API_BASE_URL;
     try {
       const res = await fetch(`${base}/scenarios/reverse-valuation`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           base_dcf_input: BASE_DCF,
           target_enterprise_value: targetEv,

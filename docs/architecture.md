@@ -20,12 +20,14 @@ out explicitly below rather than glossed over.
 - **`api/`** — HTTP boundary. FastAPI routers (`api/routers/*.py`), request
   validation via Pydantic, dependency-injected clients (`api/deps.py`).
   Contains no business logic itself; delegates to `services`/`data`/
-  `valuation`/`governance`. Every router except `/health` is mounted behind a
+  `valuation`/`governance`. Every router except `/health` and `/auth/login` is mounted behind a
   JWT Bearer dependency (`deps.get_current_user`, attached in `main.py` so new
   routes are protected by default); `deps.require_analyst` additionally gates
   the decide and run endpoints, and the approver / run author / audit actor
-  are taken from the token subject, never the request body. There is no login
-  flow yet (Definition-of-Done item 39 is PARTIAL). One narrow concurrency
+  are taken from the token subject, never the request body, and the user who
+  proposed an assumption cannot decide it. `routers/auth.py` issues the tokens
+  (`POST /auth/login`, Argon2id hashes in `app_user`); the web app keeps the
+  token in an httpOnly cookie and proxies API calls (Definition-of-Done item 39 is PARTIAL). One narrow concurrency
   exception: `api/routers/segments.py`'s `get_company_segments` runs
   `SECConnector.get_latest_filings` (submissions) and `get_company_facts`
   on a `concurrent.futures.ThreadPoolExecutor` since neither depends on the
@@ -295,8 +297,8 @@ no-paid-dependency principle.
   were consciously descoped from the 10 phases actually executed.
   Authentication was added afterwards (JWT Bearer on every router except
   `/health`, an `analyst` role for decide/run, identity from the token) but
-  has no login endpoint, user store or token refresh, and the web app's token
-  is a build-time env var — see the Definition-of-Done audit
+  has a login endpoint and cookie sessions but no token refresh/revocation or
+  password reset — see the Definition-of-Done audit
   (`docs/definition-of-done.md`) for the honest accounting of what's DONE vs
   PARTIAL vs NOT DONE.
 

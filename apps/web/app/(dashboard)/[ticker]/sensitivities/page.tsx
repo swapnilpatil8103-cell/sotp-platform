@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, use } from "react";
-import { ApiError, authHeaders } from "@/lib/api";
+import { API_BASE_URL, ApiError } from "@/lib/api";
 import type { SensitivityResult } from "@/lib/types";
 import { Card, ErrorState, SectionHeading } from "@/components/ui";
 import { SensitivityHeatmap } from "@/components/charts";
@@ -45,11 +45,11 @@ export default function SensitivitiesPage({ params }: { params: Promise<{ ticker
     setLoading(true);
     setError(null);
     setResult(null);
-    const base = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ?? "http://localhost:8000";
+    const base = API_BASE_URL;
     try {
       const res = await fetch(`${base}/valuation/sensitivity/dcf`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           base_dcf_input: BASE_INPUT,
           row_field: "wacc",

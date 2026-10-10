@@ -1,15 +1,12 @@
-# Build from apps/web:  docker build -t sotp-web --build-arg NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 .
-# NEXT_PUBLIC_* values are inlined into the browser bundle at build time, so they are build args.
+# Build from apps/web:  docker build -t sotp-web .
+# No secret or backend URL is baked into the image: API_BASE_URL (where this server
+# reaches the backend) and SESSION_COOKIE_SECURE are read at runtime.
 FROM node:20-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-ARG NEXT_PUBLIC_API_TOKEN=
-ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL \
-    NEXT_PUBLIC_API_TOKEN=$NEXT_PUBLIC_API_TOKEN \
-    NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM node:20-slim AS run

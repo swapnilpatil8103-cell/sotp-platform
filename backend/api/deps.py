@@ -19,9 +19,9 @@ Failure modes: no/invalid/expired token -> 401; valid token without the
 required role -> 403; ``AUTH_JWT_SECRET`` unset or too short -> 503 (the
 server fails closed; it never falls back to letting requests through).
 
-This module also provides ``create_access_token`` so tests and
-``scripts/mint_dev_token.py`` can mint tokens. There is deliberately no login
-endpoint yet: issuing tokens to real users (password/OIDC) is future work.
+Tokens for real users are issued by ``POST /auth/login``
+(``backend/api/routers/auth.py``). ``create_access_token`` is shared by that route,
+tests and ``scripts/mint_dev_token.py`` (a CLI/service-account helper).
 """
 
 from __future__ import annotations

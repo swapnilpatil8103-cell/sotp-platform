@@ -64,6 +64,11 @@ def test_health_is_open_without_a_token():
     assert anon.get("/health").status_code == 200
 
 
+# The complete list of routes that may be called without a token. Adding a
+# route here is a deliberate security decision.
+PUBLIC_PATHS = {"/health", "/auth/login"}
+
+
 def _protected_routes() -> list[tuple[str, str]]:
     # Enumerated from the OpenAPI schema -- the server's real, flattened view of
     # its operations. (Newer FastAPI keeps included routers as lazy objects in
@@ -72,13 +77,20 @@ def _protected_routes() -> list[tuple[str, str]]:
     return sorted(
         (method.upper(), path)
         for path, item in spec["paths"].items()
-        if path != "/health"
+        if path not in PUBLIC_PATHS
         for method in item
         if method in {"get", "post", "put", "patch", "delete"}
     )
 
 
 PROTECTED = _protected_routes()
+
+
+def test_only_health_and_login_are_public():
+    all_paths = set(app.openapi()["paths"])
+    assert PUBLIC_PATHS <= all_paths
+    assert {p for _, p in PROTECTED}.isdisjoint(PUBLIC_PATHS)
+    assert all_paths - PUBLIC_PATHS == {p for _, p in PROTECTED}
 
 
 def test_route_enumeration_is_not_vacuous():

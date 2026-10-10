@@ -37,6 +37,10 @@ class GovernanceError(ValueError):
     """Raised for invalid governance operations (e.g. deciding twice)."""
 
 
+class SeparationOfDutiesError(GovernanceError):
+    """The user trying to decide a proposal is the user who proposed it."""
+
+
 def propose(
     session: Session,
     *,
@@ -46,6 +50,7 @@ def propose(
     ai_rationale: str,
     ai_confidence: Optional[float] = None,
     subject: Optional[str] = None,
+    proposed_by: Optional[str] = None,
 ) -> AssumptionDecision:
     """Create a PENDING AssumptionDecision from an AI task's output.
 
@@ -60,6 +65,7 @@ def propose(
         ai_recommended_value=ai_recommended_value,
         ai_rationale=ai_rationale,
         ai_confidence=ai_confidence,
+        proposed_by=proposed_by,
         status=AssumptionStatus.PENDING,
     )
     session.add(decision)
@@ -78,6 +84,7 @@ def propose(
             "ai_recommended_value": ai_recommended_value,
             "ai_rationale": ai_rationale,
             "ai_confidence": ai_confidence,
+            "proposed_by": proposed_by,
         },
     )
     return decision
@@ -105,6 +112,11 @@ def record_decision(
     never mutated by this function -- only the human_* / status / decided_*
     fields are written, so both remain visible on the same row afterward.
 
+    Separation of duties: the approver may not be the user who recorded the
+    proposal (``proposed_by``, compared case-insensitively); that raises
+    ``SeparationOfDutiesError``. Proposals with no recorded proposer (created
+    before the column existed) cannot be checked and are not blocked.
+
     Raises GovernanceError if the decision has already been decided (no
     re-deciding a row -- create a new proposal instead) or for an unknown
     ``decision`` value / a missing ``human_value`` on EDIT.
@@ -116,6 +128,11 @@ def record_decision(
         raise GovernanceError(
             f"AssumptionDecision {decision_id} already decided (status={row.status}); "
             "create a new proposal instead of re-deciding."
+        )
+
+    if row.proposed_by and row.proposed_by.casefold() == user_id.casefold():
+        raise SeparationOfDutiesError(
+            "Separation of duties: you proposed this assumption, so a different user must decide it."
         )
 
     decision_upper = decision.upper()

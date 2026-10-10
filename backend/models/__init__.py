@@ -24,8 +24,10 @@ from .audit_log_entry import AuditLogEntry
 from .market_data_snapshot import MarketDataSnapshot
 from .insider_transaction import InsiderTransaction
 from .institutional_holding import InstitutionalHolding
+from .app_user import AppUser
 
 __all__ = [
+    "AppUser",
     "DataStatus",
     "FilingType",
     "ValuationMethod",

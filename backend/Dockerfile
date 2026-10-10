@@ -11,6 +11,7 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r backend/requirements.txt
 
 COPY backend backend
+COPY scripts scripts
 
 RUN useradd --create-home --uid 1000 app && chown -R app /app
 USER app

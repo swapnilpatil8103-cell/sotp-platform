@@ -215,6 +215,16 @@ proposal into a persisted, human-actionable record.
   (`test_governance_module_never_imports_valuation_engine`), matching the
   same discipline Phase 6 used for the AI/valuation boundary.
 
+### Separation of duties
+
+`POST /valuation/assumptions/propose` records the authenticated caller as
+`AssumptionDecision.proposed_by`. The decide endpoint refuses (`403`) when the
+caller is that same user, compared case-insensitively, for APPROVE, EDIT and
+REJECT alike, and leaves the proposal `PENDING` so a different analyst can decide
+it. The check is in `backend/governance/approval.py::record_decision`
+(`SeparationOfDutiesError`), not only the router. Proposals created before the
+column existed have no recorded proposer and cannot be checked.
+
 ## Versioning and diff (Phase 7)
 
 `backend/governance/valuation_run.py`'s `execute_valuation_run()` computes

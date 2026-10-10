@@ -51,6 +51,12 @@ class AssumptionDecision(SQLModel, table=True):
 
     status: AssumptionStatus = Field(default=AssumptionStatus.PENDING)
 
+    # Who requested/recorded this proposal (token subject). The approver of the
+    # decision may not be this same user (separation of duties, enforced in
+    # backend/governance/approval.py). NULL on rows created before the column
+    # existed; the rule cannot be applied to those.
+    proposed_by: Optional[str] = Field(default=None, max_length=256, description="User who recorded the proposal")
+
     decided_by: Optional[str] = Field(default=None, max_length=256, description="User identifier")
     decided_at: Optional[datetime] = Field(default=None)
 

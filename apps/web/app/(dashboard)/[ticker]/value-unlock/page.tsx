@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState, use } from "react";
-import { ApiError, authHeaders, getCompanyId } from "@/lib/api";
+import { API_BASE_URL, ApiError, getCompanyId } from "@/lib/api";
 import type { AssumptionDecisionOut, ValueUnlockProposeResponse } from "@/lib/types";
 import { AIPanel, Card, ErrorState, SectionHeading, Table } from "@/components/ui";
 
-const BASE = () => process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ?? "http://localhost:8000";
+const BASE = () => API_BASE_URL;
 
 /**
  * Value Unlock: AI proposes which structural actions (spin-off, IPO, asset
@@ -62,7 +62,7 @@ export default function ValueUnlockPage({ params }: { params: Promise<{ ticker: 
       });
       const res = await fetch(`${BASE()}/scenarios/value-unlock/propose?${qp.toString()}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(sotpBreakdown),
       });
       if (!res.ok) {
@@ -81,7 +81,7 @@ export default function ValueUnlockPage({ params }: { params: Promise<{ ticker: 
     try {
       const res = await fetch(`${BASE()}/valuation/assumptions/${decisionId}/decide`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision, reason: `${decision} via Value Unlock UI` }),
       });
       if (!res.ok) {

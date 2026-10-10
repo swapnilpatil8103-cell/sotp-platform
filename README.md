@@ -41,7 +41,7 @@ backend/            FastAPI backend (api, models, services, valuation, ai, gover
 packages/shared-types/  TypeScript types shared across frontend (and future services)
 data/cache/         Local cache for SEC/market data responses (gitignored contents)
 docs/               Architecture, data model, valuation methodology, AI governance, API docs
-scripts/            Dev scripts (`mint_dev_token.py` mints a JWT for local use)
+scripts/            Dev scripts (`create_user.py` adds a login, `mint_dev_token.py` mints a JWT for scripts)
 ```
 
 ## Running locally
@@ -79,31 +79,62 @@ and the `human:<sub>` actor in the audit log. The request bodies no longer have
 `user_id` / `created_by` fields (sending one is a `422`), so a caller cannot
 approve or run "as" someone else.
 
-Local setup:
+Signing in (web app and API):
 
 ```bash
 # 1. Put a signing secret (>= 32 chars) in .env, then restart the backend.
 python -c "import secrets; print(secrets.token_urlsafe(48))"   # -> AUTH_JWT_SECRET=...
 
-# 2. Mint a token. --sub is what the audit trail will record.
-python scripts/mint_dev_token.py --sub you@example.com --hours 720
+# 2. Apply migrations (creates the app_user table) and create a login.
+#    There is no sign-up page; the password is read from a hidden prompt.
+alembic -c backend/alembic.ini upgrade head
+python scripts/create_user.py --email you@example.com --roles analyst
 
-# 3. Call the API with it.
-curl -H "Authorization: Bearer <token>" http://localhost:8000/companies/AAPL
+# 3. Open http://localhost:3000 and sign in, or use the API directly:
+curl -s -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" \
+     -d '{"email":"you@example.com","password":"..."}'      # -> {"access_token": "...", ...}
 ```
 
-If `AUTH_JWT_SECRET` is unset or shorter than 32 characters, every protected
-endpoint answers `503` — the server fails closed rather than letting requests
-through. For the web app, put the token in `apps/web/.env.local` as
-`NEXT_PUBLIC_API_TOKEN="<token>"` and restart `npm run dev`.
+`POST /auth/login` is the only open route besides `/health`. It returns a
+token valid for 60 minutes (`AUTH_TOKEN_MINUTES`); the password is verified
+against an Argon2id hash. Wrong password, unknown email and disabled account all
+return the same `401`, and five failures for an email within 15 minutes return
+`429` (an in-memory, per-process limit). Passwords must be at least 12
+characters.
 
-**Not built yet** (so this is real access control, but not a finished auth
-system): there is no login endpoint, user store, or token refresh/revocation —
-tokens are minted by hand with the script above. The web app's token is a
-`NEXT_PUBLIC_` env var, so it is baked into the browser bundle and visible to
-anyone who can load the app (a `TODO` in `apps/web/lib/api.ts`); treat that as
-local-development only. The interactive docs (`/docs`, `/openapi.json`) remain
-open.
+**The browser never holds the token.** The web app signs in through
+`/api/auth/login`, a Next.js route handler that stores the token in an
+`httpOnly`, `SameSite=Strict` cookie (`Secure` in production builds; set
+`SESSION_COOKIE_SECURE=false` only for a production build on plain http). Pages
+call `/api/backend/*`, a proxy route that reads the cookie and adds the
+`Authorization` header, so no credential is in the JavaScript bundle and page
+scripts cannot read it. `proxy.ts` sends signed-out visitors to `/login`, and
+state-changing proxy calls are refused if their `Origin` is not the app's own.
+The server-side `API_BASE_URL` (default `http://localhost:8000`) says where the
+Next.js server reaches the backend. `scripts/mint_dev_token.py` still mints a
+token for scripts and `curl`.
+
+**Who did it comes from the token, never the request body.** The token's `sub`
+(the user's email) is recorded as `AssumptionDecision.decided_by`,
+`ValuationRun.created_by` and the `human:<sub>` actor in the audit log. The
+request bodies have no `user_id` / `created_by` fields (sending one is a
+`422`), so a caller cannot approve or run "as" someone else.
+
+**Separation of duties.** `POST /valuation/assumptions/propose` records the
+caller as `proposed_by`. That same user (compared case-insensitively) gets a
+`403` if they try to approve, edit or reject the proposal; a different
+`analyst` must decide it. Proposals created before this column existed have no
+recorded proposer and are not covered. With the `analyst` role gate, decide and
+run answer `403` to a user without that role; every other endpoint is open to
+any signed-in user.
+
+If `AUTH_JWT_SECRET` is unset or shorter than 32 characters, every protected
+endpoint (and login) answers `503`: the server fails closed.
+
+**Not built yet:** token refresh and revocation (disabling a user takes effect
+when their token expires, at most an hour later), password reset or a user-admin
+page, a rate limiter shared across instances, MFA/SSO. The interactive docs
+(`/docs`, `/openapi.json`) remain open.
 
 ### Database (Postgres/Supabase) + migrations
 
@@ -146,9 +177,14 @@ docker compose up --build
 ```
 
 The backend container applies the Alembic migrations on start, then serves on
-port 8000; the web app is on port 3000. `NEXT_PUBLIC_API_BASE_URL` and
-`NEXT_PUBLIC_API_TOKEN` are inlined into the web bundle at **build** time, so
-change them in `.env` and rebuild. These files were written without Docker
+port 8000; the web app is on port 3000 and reaches the backend through its own
+server (`API_BASE_URL=http://backend:8000`), so nothing secret is baked into the
+image. Create a login once the stack is up (prompts for the password):
+
+```bash
+docker compose exec backend python scripts/create_user.py --email you@example.com
+```
+ These files were written without Docker
 available and the workflow has not yet run on GitHub, so treat the first run as
 the real test.
 
@@ -167,7 +203,7 @@ npm run build         # production build; runs full TypeScript strict type-check
 
 `npm install` and `npm run build` are both verified to succeed cleanly as of
 Phase 9/10 (all routes compile and prerender). The app expects the backend
-at `NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:8000`); with no
+at `API_BASE_URL` (server-side, default `http://localhost:8000`); with no
 backend running, pages degrade gracefully to an explicit "Backend
 unavailable" error state rather than crashing.
 
@@ -205,11 +241,12 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
   unset or too short, every endpoint except `/health` answers `503`. **Not
   required to run the test suite** — `conftest.py` pins a test-only secret.
 - `ALLOWED_ORIGINS` — CORS allowlist for the backend.
-- `NEXT_PUBLIC_API_BASE_URL` — base URL the frontend uses to call the
-  backend.
-- `NEXT_PUBLIC_API_TOKEN` — Bearer token the web app sends (set in
-  `apps/web/.env.local`, not the root `.env`). Local development only; see
-  Authentication above.
+- `AUTH_TOKEN_MINUTES` — lifetime of a login token (default 60, clamped to
+  1..1440).
+- `API_BASE_URL` — set in `apps/web/.env.local`: where the Next.js server reaches
+  the backend (server-side only; the browser never sees it).
+- `SESSION_COOKIE_SECURE` — set to `false` only to serve a production build over
+  plain http. Defaults to `Secure` in production.
 
 ## Documentation
 
@@ -225,11 +262,11 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
 
 ## Status
 
-All 10 phases complete as scoped. Backend: 531 unit/router tests +
-12 integration tests (real SEC EDGAR calls, `-m integration`), 543 in total, all passing.
+All 10 phases complete as scoped. Backend: 563 unit/router tests +
+12 integration tests (real SEC EDGAR calls, `-m integration`), 575 in total, all passing.
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
-is PARTIAL: no login flow yet). CI and containers are in place (see "CI and containers" below; item 40 is
+is PARTIAL: login and sessions built; no token revocation or password reset). CI and containers are in place (see "CI and containers" below; item 40 is
 PARTIAL: unverified on GitHub/Docker, no CD) — see
 `docs/definition-of-done.md` for the itemized final status of every
 Definition-of-Done requirement, including what's PARTIAL or NOT DONE.

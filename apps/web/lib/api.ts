@@ -37,20 +37,17 @@ import type {
   ValuationRunOut,
 } from "./types";
 
-const BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ??
-  "http://localhost:8000";
+// All backend calls go through the Next.js proxy route (app/api/backend), which
+// attaches the session token from an httpOnly cookie. No credential is ever
+// available to, or sent from, browser JavaScript. The proxy's own upstream
+// address is the server-side API_BASE_URL env var.
+const BASE_URL = "/api/backend";
 
-// Bearer token for the backend's JWT auth. TODO(auth): this is a stopgap -- the
-// token comes from a build-time env var, so it is baked into the browser bundle
-// and visible to anyone who can load the app (fine for local development only).
-// Replace with a real login flow (obtain a short-lived token per signed-in user,
-// keep it out of the bundle, refresh/redirect to login on 401).
-const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN;
-
-/** `Authorization` header for backend calls. Use this on any direct `fetch`. */
-export function authHeaders(): Record<string, string> {
-  return API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
+/** Send the user to the login page (the session cookie is missing, expired or revoked). */
+function redirectToLogin(): void {
+  if (typeof window === "undefined" || window.location.pathname === "/login") return;
+  const next = window.location.pathname + window.location.search;
+  window.location.assign(`/login?next=${encodeURIComponent(next)}`);
 }
 
 export class ApiError extends Error {
@@ -75,7 +72,6 @@ async function request<T>(
       ...init,
       headers: {
         "Content-Type": "application/json",
-        ...authHeaders(),
         ...(init?.headers ?? {}),
       },
       cache: "no-store",
@@ -86,6 +82,12 @@ async function request<T>(
       "Backend unavailable — could not reach the SOTP Intelligence API.",
       err instanceof Error ? err.message : String(err)
     );
+  }
+
+  if (res.status === 401) redirectToLogin();
+  if (res.status === 502) {
+    // The proxy could not reach the backend.
+    throw new ApiError(0, "Backend unavailable — could not reach the SOTP Intelligence API.", undefined);
   }
 
   if (!res.ok) {

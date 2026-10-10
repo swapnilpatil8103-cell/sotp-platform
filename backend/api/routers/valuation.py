@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlmodel import Session
 
-from backend.api.deps import AuthenticatedUser, require_analyst
+from backend.api.deps import AuthenticatedUser, get_current_user, require_analyst
 from backend.audit.logger import get_audit_trail
 from backend.db import get_session
 from backend.governance import approval
@@ -258,12 +258,17 @@ def list_valuation_runs(ticker: str):
 
 
 @router.post("/assumptions/propose", response_model=AssumptionDecisionOut)
-def propose_assumption(payload: ProposeAssumptionRequest, session: Session = Depends(get_session)):
+def propose_assumption(
+    payload: ProposeAssumptionRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
     """Create a PENDING AssumptionDecision from an AI task's output (Phase 6).
 
     This endpoint itself does not call the AI -- callers run a
     backend.ai.tasks task first (e.g. recommend_assumptions) and pass its
-    proposal fields here to be recorded as a governance artifact.
+    proposal fields here to be recorded as a governance artifact. The caller
+    is recorded as `proposed_by` and can never be the one to decide it.
     """
     decision = approval.propose(
         session,
@@ -273,6 +278,7 @@ def propose_assumption(payload: ProposeAssumptionRequest, session: Session = Dep
         ai_rationale=payload.ai_rationale,
         ai_confidence=payload.ai_confidence,
         subject=payload.subject,
+        proposed_by=user.subject,
     )
     return decision
 
@@ -299,6 +305,8 @@ def decide_assumption(
             human_value=payload.human_value,
             reason=payload.reason,
         )
+    except approval.SeparationOfDutiesError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except approval.GovernanceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

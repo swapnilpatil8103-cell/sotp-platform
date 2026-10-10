@@ -31,6 +31,7 @@ class AssumptionDecisionOut(BaseModel):
     approved_value: Optional[float]
     approval_reason: Optional[str]
     status: str
+    proposed_by: Optional[str] = None
     decided_by: Optional[str]
     decided_at: Optional[datetime]
     created_at: datetime

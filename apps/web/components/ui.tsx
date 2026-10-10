@@ -230,11 +230,10 @@ export function ErrorState({
   if (isUnreachable) {
     title = "Backend unavailable";
     body =
-      "Could not reach the SOTP Intelligence API. Confirm the backend is running and NEXT_PUBLIC_API_BASE_URL is set correctly.";
+      "Could not reach the SOTP Intelligence API. Confirm the backend is running and the web server's API_BASE_URL points at it.";
   } else if (status === 401) {
-    title = "Authentication required";
-    body =
-      "The backend rejected the request's credentials. Set NEXT_PUBLIC_API_TOKEN (a valid, unexpired Bearer token — see the README) and restart the web dev server.";
+    title = "Session expired";
+    body = "Your session has ended. Sign in again to continue.";
   } else if (status === 403) {
     title = "Not permitted";
     body = error instanceof ApiError && error.detail ? error.detail : "Your account does not have the role required for this action.";
@@ -253,6 +252,11 @@ export function ErrorState({
       <p className="text-sm font-semibold text-[#DC2626]">{title}</p>
       {context && <p className="mt-1 text-xs text-[#111827]/50">{context}</p>}
       <p className="mx-auto mt-2 max-w-md text-xs text-[#111827]/70">{body}</p>
+      {status === 401 && (
+        <a href="/login" className="mt-3 inline-block text-xs font-medium text-[#2563EB] underline">
+          Go to sign in
+        </a>
+      )}
     </div>
   );
 }

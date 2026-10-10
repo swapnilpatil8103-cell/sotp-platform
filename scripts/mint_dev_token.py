@@ -1,7 +1,8 @@
 """Mint a Bearer token for local development.
 
-There is no login endpoint yet, so this is how you get a token for the API
-(and for ``NEXT_PUBLIC_API_TOKEN`` in ``apps/web/.env.local``). It signs with
+Real users sign in with ``POST /auth/login`` (create one with
+``scripts/create_user.py``). This mints a token directly, without a user row, for
+scripts and curl; never put one in the web app. It signs with
 ``AUTH_JWT_SECRET`` from the environment or the repo's ``.env``.
 
     python scripts/mint_dev_token.py --sub you@example.com

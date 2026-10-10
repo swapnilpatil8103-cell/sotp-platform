@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { SessionBar } from "@/components/session-bar";
 
 const EXAMPLE_TICKERS = ["AAPL", "GOOGL", "AMZN", "MSFT", "META"];
 
@@ -24,6 +25,9 @@ export default function Home() {
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center px-6 py-24">
+      <div className="absolute right-6 top-4">
+        <SessionBar />
+      </div>
       <div className="w-full max-w-2xl text-center">
         <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight text-primary">
           SOTP INTELLIGENCE
