@@ -82,9 +82,13 @@ out explicitly below rather than glossed over.
   overwrite a number.
 - **`governance/`** — `approval.py` (propose/decide workflow producing
   `AssumptionDecision` rows: `PENDING` → `APPROVED`/`EDITED`/`REJECTED`/
-  `OVERRIDDEN`), `valuation_run.py` (`execute_valuation_run`, gated on every
-  referenced decision being approved; `list_versions`/`get_version`/
-  `diff_runs` for version history and diffing).
+  `OVERRIDDEN`), `run_computation.py` (validates a run's `inputs` against
+  `DcfInput`/`CompsInput`/`SotpInput`, runs the deterministic engine, and
+  checks approved assumption values against the input fields they govern),
+  `valuation_run.py` (`execute_valuation_run`: gated on every referenced
+  decision being approved, then persists the *server-computed* outputs — it
+  takes no `outputs` argument; `list_versions`/`get_version`/`diff_runs` for
+  version history and diffing).
 - **`audit/`** — `logger.py`: immutable `AuditLogEntry` rows recording every
   governance decision and valuation run, queryable per-company or per-run
   via `/valuation/*/audit-trail`.
@@ -307,7 +311,10 @@ no-paid-dependency principle.
    `POST /valuation/assumptions/propose` → human decision via
    `POST /valuation/assumptions/{id}/decide` before
    `POST /valuation/run` will persist a `ValuationRun` referencing them —
-   unapproved assumptions are a hard `400`, not a soft warning.
+   unapproved assumptions are a hard `400`, not a soft warning. The run
+   endpoint takes `inputs` only: the server validates them, runs the engine
+   and persists its own outputs, and a mapped approved value that differs
+   from the corresponding input is likewise a `400`.
 7. Every governance decision and run is queryable via
    `/valuation/company/{id}/audit-trail` and
    `/valuation/company/{id}/runs` (version history + diff).

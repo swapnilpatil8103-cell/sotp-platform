@@ -274,12 +274,38 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
 - **`GET /valuation/company/{company_id}/assumptions`** →
   `list[AssumptionDecisionOut]`.
 - **`POST /valuation/run`** — body: `RunValuationRequest` (`company_id,
-  method, decision_ids, inputs, outputs, created_by, source_data_version`)
-  → `ValuationRunOut`. Persists a new versioned `ValuationRun`, gated on
-  every `decision_ids` entry being `APPROVED`/`OVERRIDDEN` for that company.
-  Does not itself run the valuation engine — `inputs`/`outputs` are the
-  already-computed result of an engine call using approved assumption
-  values. `400` on unknown `method` or an unapproved/foreign decision id.
+  method, decision_ids, inputs, created_by, source_data_version`)
+  → `ValuationRunOut`. Computes and persists a new versioned
+  `ValuationRun`, gated on every `decision_ids` entry being
+  `APPROVED`/`OVERRIDDEN` for that company.
+  **The server never trusts a client-supplied result.** The request has no
+  `outputs`; unknown body fields are forbidden, so sending `outputs` is a
+  `422` rather than being silently ignored. `inputs` is validated against
+  `DcfInput` / `CompsInput` / `SotpInput` for the `method` (unknown keys are
+  rejected, not dropped), the deterministic engine (`run_dcf` / `run_comps` /
+  `run_sotp`) is run server-side, and the persisted `outputs` are the
+  engine's result. The persisted `inputs` are the validated model's fields
+  plus a server-built `_governance_snapshot` (`assumption_decision_ids`,
+  `assumptions_used`, `assumptions_verified`, `assumptions_unmapped`,
+  `source_data_version`).
+  Each approved decision whose `assumption_key` maps to an input field must
+  equal that field (relative tolerance 1e-9); the value used is the human's
+  `approved_value`, so after an `EDIT` the AI's original number no longer
+  matches. Mapped keys: DCF — `wacc`, `terminal_growth_rate`,
+  `exit_multiple`, `revenue_growth_rate` (→ `revenue_growth_rates`) and
+  `ebit_margin` (→ `ebit_margins`), where the two schedule keys are flat
+  rates and so must hold in **every** forecast year; COMPS — `peer_multiple`
+  (→ `chosen_multiple_value`); SOTP — none today. Any other approved key
+  still clears the approval gate but is listed under `assumptions_unmapped`
+  and is not value-checked. Two decisions on one key with different approved
+  values can never both match, so such a run is refused.
+  `400`, with nothing written, on: unknown `method`; a decision that is
+  missing, `PENDING`, `REJECTED`, or belongs to another company (checked
+  first, before the inputs are looked at); invalid, incomplete or
+  unknown-keyed `inputs`, or inputs the engine rejects (e.g. WACC ≤ terminal
+  growth, mismatched schedule lengths); or an approved value that does not
+  match its input field. **Breaking change:** `outputs` was previously a
+  required request field.
 - **`GET /valuation/company/{company_id}/runs?method=...`** →
   `list[ValuationRunOut]` (version history, optionally filtered by method).
 - **`GET /valuation/company/{company_id}/runs/diff?from_version=&to_version=&method=`**

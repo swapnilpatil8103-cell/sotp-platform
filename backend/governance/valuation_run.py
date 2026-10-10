@@ -1,18 +1,18 @@
 """Orchestration: approved assumptions -> Phase 5 engine -> versioned ValuationRun.
 
-This module never computes valuation math itself; it only (a) enforces that
+This module does no valuation math of its own, but it never persists a result
+it did not get from the engine. ``execute_valuation_run`` (a) enforces that
 every assumption an execution consumes has a human decision behind it, (b)
-calls into ``backend.valuation`` (already computed by the caller -- see
-``execute_valuation_run``'s ``outputs`` param) is out of scope here too; this
-module's job is strictly gating + persisting + versioning + diffing.
+hands the client's ``inputs`` to ``run_computation`` to be validated against
+the method's input schema and run through the deterministic engine
+server-side, (c) checks the approved assumption values against those inputs,
+and only then (d) persists the validated inputs and the SERVER-COMPUTED
+outputs as a new versioned ``ValuationRun``.
 
-The actual call into e.g. ``backend.valuation.sotp.run_sotp`` happens in the
-API layer (``backend/api/routers/valuation.py``), which assembles a
-``SotpInput`` (or DCF/comps input) using the approved values pulled from
-governance, invokes the Phase 5 engine, and passes the resulting
-inputs/outputs dicts here to persist as a new ``ValuationRun`` version. That
-keeps this module free of any dependency on the shape of any one
-methodology's input/result schema.
+There is deliberately no ``outputs`` parameter: a persisted run's outputs are
+always a function of its persisted inputs, so a client cannot save a
+fabricated result under approved decision ids. Every check happens before the
+first write, so a rejected run leaves no trace in the database.
 """
 
 from __future__ import annotations
@@ -22,12 +22,13 @@ from typing import Any, Optional
 from sqlmodel import Session, select
 
 from backend.audit.logger import ACTION_VALUATION_RUN_EXECUTED, actor_human, log_event
+from backend.governance.run_computation import RunRejectedError, compute_run, verify_assumptions
 from backend.models.assumption_decision import AssumptionDecision
 from backend.models.enums import AssumptionStatus, ValuationMethod
 from backend.models.valuation_run import ValuationRun
 
 
-class UnapprovedAssumptionError(ValueError):
+class UnapprovedAssumptionError(RunRejectedError):
     """Raised when a valuation run is attempted using an assumption that has
     no human decision (still PENDING) or was REJECTED. This is the concrete
     enforcement mechanism for "no AI-only auto-execution": every
@@ -47,19 +48,13 @@ def _next_version(session: Session, company_id: int, method: ValuationMethod) ->
     return (max(existing) if existing else 0) + 1
 
 
-def assemble_approved_assumptions(
+def _load_approved_decisions(
     session: Session, decision_ids: list[int], *, company_id: int
-) -> dict[str, float]:
-    """Resolve a list of AssumptionDecision ids into {assumption_key: value},
-    raising UnapprovedAssumptionError if any is missing, belongs to a
-    different company, or is not APPROVED/OVERRIDDEN.
-
-    This is the gate: callers (the API layer) MUST go through this function
-    (or execute_valuation_run, which calls it) to turn decisions into usable
-    numbers -- there is no other path from AssumptionDecision to a value
-    that skips the status check.
-    """
-    assumptions: dict[str, float] = {}
+) -> list[AssumptionDecision]:
+    """The approval gate: resolve ids to rows, raising UnapprovedAssumptionError
+    if any is missing, belongs to a different company, or is not
+    APPROVED/OVERRIDDEN."""
+    rows: list[AssumptionDecision] = []
     for decision_id in decision_ids:
         row = session.get(AssumptionDecision, decision_id)
         if row is None:
@@ -73,8 +68,24 @@ def assemble_approved_assumptions(
                 f"AssumptionDecision {decision_id} ({row.assumption_key}) has status={row.status}; "
                 "a human must APPROVE or EDIT it before it can be used in a valuation run."
             )
-        assumptions[row.assumption_key] = row.approved_value
-    return assumptions
+        rows.append(row)
+    return rows
+
+
+def assemble_approved_assumptions(
+    session: Session, decision_ids: list[int], *, company_id: int
+) -> dict[str, float]:
+    """Resolve a list of AssumptionDecision ids into {assumption_key: value},
+    raising UnapprovedAssumptionError if any is missing, belongs to a
+    different company, or is not APPROVED/OVERRIDDEN.
+
+    This is the gate: callers MUST go through this function (or
+    execute_valuation_run, which uses the same check) to turn decisions into
+    usable numbers -- there is no other path from AssumptionDecision to a
+    value that skips the status check.
+    """
+    rows = _load_approved_decisions(session, decision_ids, company_id=company_id)
+    return {row.assumption_key: row.approved_value for row in rows}
 
 
 def execute_valuation_run(
@@ -84,32 +95,48 @@ def execute_valuation_run(
     method: ValuationMethod,
     decision_ids: list[int],
     inputs: dict[str, Any],
-    outputs: dict[str, Any],
     created_by: str,
     source_data_version: Optional[dict[str, Any]] = None,
 ) -> ValuationRun:
-    """Persist a new versioned ValuationRun, gated on approved assumptions.
+    """Compute and persist a new versioned ValuationRun, gated on approved
+    assumptions.
 
-    ``inputs`` should be the full snapshot of what was fed to the Phase 5
-    engine (already computed by the caller using
-    ``assemble_approved_assumptions``'s output plus peer set / methodology /
-    source-data references); ``outputs`` is the engine's result, already
-    computed by the caller. This function re-validates decision_ids itself
-    (does not trust the caller to have checked) before persisting anything,
-    and records which company/peer-set/methodology/human-decision snapshot
-    produced this run inside ``inputs["_governance_snapshot"]``.
+    ``inputs`` is the client's claim of what to feed the engine; it is
+    validated against the method's input schema and run through the
+    deterministic engine HERE, and the engine's result is what gets stored as
+    ``outputs``. In order, and all before the first write:
+
+    1. every decision_id must be APPROVED/OVERRIDDEN for this company
+       (``UnapprovedAssumptionError``) -- checked first, so an unapproved run
+       is refused before any computation;
+    2. ``inputs`` must validate and the engine must accept them
+       (``InvalidRunInputsError``);
+    3. each approved value whose ``assumption_key`` maps to an input field
+       must equal that field (``AssumptionMismatchError``).
+
+    The persisted inputs are the validated model (schema fields only) plus a
+    server-built ``_governance_snapshot`` recording which decisions were used,
+    which were verified against which input field, and which keys had no
+    field to verify.
     """
-    # Re-validate here too (not just trust the caller) -- this is the actual
-    # enforcement point: no ValuationRun is ever written without every
-    # decision_id checking out as APPROVED/OVERRIDDEN for this company.
-    assumptions_used = assemble_approved_assumptions(session, decision_ids, company_id=company_id)
+    decisions = _load_approved_decisions(session, decision_ids, company_id=company_id)
+    computed = compute_run(method, inputs)
+    verified, unmapped = verify_assumptions(
+        method,
+        computed.model,
+        [(row.id, row.assumption_key, row.approved_value) for row in decisions],
+    )
+    assumptions_used = {row.assumption_key: row.approved_value for row in decisions}
+    outputs = computed.outputs
 
     version = _next_version(session, company_id, method)
 
-    snapshot_inputs = dict(inputs)
+    snapshot_inputs = dict(computed.inputs)
     snapshot_inputs["_governance_snapshot"] = {
         "assumption_decision_ids": decision_ids,
         "assumptions_used": assumptions_used,
+        "assumptions_verified": verified,
+        "assumptions_unmapped": unmapped,
         "source_data_version": source_data_version or {},
     }
 
@@ -184,6 +211,13 @@ _KEY_FIELDS_OF_INTEREST = (
     "implied_share_price",
     "enterprise_value",
     "equity_value",
+    # Real engine field names (DcfInput/CompsInput/SotpResult/...), which is
+    # what persisted runs now actually contain.
+    "revenue_growth_rates",
+    "ebit_margins",
+    "chosen_multiple_value",
+    "implied_price_per_share",
+    "sum_of_segment_evs",
 )
 
 

@@ -46,11 +46,22 @@ class RecordDecisionRequest(BaseModel):
 
 
 class RunValuationRequest(BaseModel):
+    """There is intentionally no ``outputs`` field and extras are forbidden: the
+    server computes outputs itself from ``inputs``, so a client that sends its
+    own ``outputs`` gets a 422 rather than having them silently ignored."""
+
+    model_config = {"extra": "forbid"}
+
     company_id: int
     method: str = Field(..., description="DCF | COMPS | SOTP")
     decision_ids: list[int] = Field(..., description="AssumptionDecision ids to consume; each must be APPROVED/OVERRIDDEN")
-    inputs: dict[str, Any] = Field(..., description="Full input snapshot fed to the Phase 5 engine (already assembled by caller)")
-    outputs: dict[str, Any] = Field(..., description="Phase 5 engine result, already computed by caller")
+    inputs: dict[str, Any] = Field(
+        ...,
+        description=(
+            "Input for the method's engine, validated server-side against DcfInput / CompsInput / SotpInput "
+            "(unknown keys are rejected). Approved assumption values must match the corresponding input fields."
+        ),
+    )
     created_by: str
     source_data_version: Optional[dict[str, Any]] = None
 

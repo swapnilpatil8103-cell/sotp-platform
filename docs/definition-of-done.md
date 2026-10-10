@@ -15,7 +15,7 @@ Status legend: **DONE** / **PARTIAL** / **NOT DONE**.
 | 8 | Missing-data handling | DONE | `DataStatus.MISSING` facts are explicit, first-class rows (never silently omitted or zero-filled). |
 | 9 | Business classification | DONE | `business_classifier.py`, SIC→category (verified live: JPM → `Bank`, AAPL → non-bank), drives eligible methodologies. |
 | 10 | Methodology recommendation | DONE | AI task (`backend/ai/tasks/methodology_recommendation.py`) proposes eligible methodologies; constrained to the classifier's eligible set. |
-| 11 | Human approval on methodology/peers/assumptions | DONE | `AssumptionDecision` propose/decide workflow (`governance/approval.py`) covers all three; `POST /valuation/run` hard-`400`s if any referenced decision isn't `APPROVED`/`OVERRIDDEN`. |
+| 11 | Human approval on methodology/peers/assumptions | DONE | `AssumptionDecision` propose/decide workflow (`governance/approval.py`) covers all three; `POST /valuation/run` hard-`400`s if any referenced decision isn't `APPROVED`/`OVERRIDDEN`, recomputes the outputs server-side (a client cannot supply them), and `400`s if an approved value differs from the input field it governs (`test_governed_run_integrity.py`). |
 | 12 | DCF | DONE | `valuation/dcf.py`, unit-tested (`test_valuation_dcf.py`) and exercised end-to-end against real AAPL data in `test_integration_pipeline.py`. |
 | 13 | Comps | DONE | `valuation/comps.py`, unit-tested (`test_valuation_comps.py`); router `POST /valuation/comps`. |
 | 14 | SOTP | DONE | `valuation/sotp.py`, unit-tested and exercised end-to-end in the new integration test. |

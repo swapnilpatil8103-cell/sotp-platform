@@ -17,6 +17,7 @@ from backend.data.persistence import get_or_create_company
 from backend.governance import approval
 from backend.governance.valuation_run import execute_valuation_run
 from backend.models.enums import ValuationMethod
+from backend.tests.fixtures.run_inputs import dcf_inputs
 
 
 def test_log_and_retrieve_round_trip(session):
@@ -62,8 +63,7 @@ def test_actor_attribution_ai_vs_human_vs_system(session):
         company_id=company.id,
         method=ValuationMethod.DCF,
         decision_ids=[decision.id],
-        inputs={"wacc": 0.09},
-        outputs={"per_share_value": 100.0},
+        inputs=dcf_inputs(wacc=0.09),
         created_by="analyst@firm.com",
     )
 
@@ -98,8 +98,7 @@ def test_get_audit_trail_reconstructs_claim_to_output_story(session):
         company_id=company.id,
         method=ValuationMethod.DCF,
         decision_ids=[decision.id],
-        inputs={"terminal_growth_rate": 0.025},
-        outputs={"per_share_value": 300.0},
+        inputs=dcf_inputs(terminal_growth_rate=0.025),
         created_by="a@b.com",
     )
 

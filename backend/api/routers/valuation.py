@@ -16,8 +16,8 @@ from sqlmodel import Session
 from backend.audit.logger import get_audit_trail
 from backend.db import get_session
 from backend.governance import approval
+from backend.governance.run_computation import RunRejectedError
 from backend.governance.valuation_run import (
-    UnapprovedAssumptionError,
     diff_runs,
     execute_valuation_run,
     get_version,
@@ -278,15 +278,22 @@ def list_assumptions(company_id: int, session: Session = Depends(get_session)):
 
 @router.post("/run", response_model=ValuationRunOut)
 def run_governed_valuation(payload: RunValuationRequest, session: Session = Depends(get_session)):
-    """Persist a new versioned ValuationRun, gated on approved assumptions.
+    """Compute and persist a new versioned ValuationRun, gated on approved
+    assumptions.
 
-    Every id in `decision_ids` must resolve to an AssumptionDecision that is
-    APPROVED or OVERRIDDEN (never PENDING/REJECTED) and belongs to
-    `company_id` -- otherwise this 400s and nothing is written. `inputs`/
-    `outputs` are the already-computed result of calling the Phase 5 engine
-    (e.g. POST /valuation/sotp) using the approved assumption values; this
-    endpoint does not itself invoke the valuation engine, keeping it
-    methodology-agnostic (DCF/COMPS/SOTP all shaped the same way here).
+    The server never trusts a client-supplied result: the request carries no
+    `outputs` (sending one is a 422), `inputs` is validated against
+    DcfInput / CompsInput / SotpInput for the method, the deterministic engine
+    is run server-side, and the persisted `outputs` are what the engine
+    returned. Responds 400, writing nothing, if:
+
+    - any id in `decision_ids` is not an APPROVED/OVERRIDDEN decision for
+      `company_id` (checked first);
+    - `inputs` fail validation, contain unknown keys, or are rejected by the
+      engine;
+    - an approved value whose `assumption_key` maps to an input field (see
+      `backend/governance/run_computation.py::ASSUMPTION_FIELD_MAP`) differs
+      from that input.
     """
     try:
         method = ValuationMethod(payload.method.upper())
@@ -300,11 +307,10 @@ def run_governed_valuation(payload: RunValuationRequest, session: Session = Depe
             method=method,
             decision_ids=payload.decision_ids,
             inputs=payload.inputs,
-            outputs=payload.outputs,
             created_by=payload.created_by,
             source_data_version=payload.source_data_version,
         )
-    except UnapprovedAssumptionError as exc:
+    except RunRejectedError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

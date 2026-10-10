@@ -186,6 +186,26 @@ proposal into a persisted, human-actionable record.
   assumption. This is tested directly (`test_running_with_pending_assumption_is_rejected`,
   `test_running_with_rejected_assumption_is_rejected` in
   `backend/tests/test_governance_valuation_run.py`).
+- **Approval is not enough on its own: the result must be the server's.**
+  A decision id proves a human approved *a number*; it says nothing about
+  whether the run saved under it used that number or whether the stored
+  result is real. `execute_valuation_run()` therefore (1) takes no `outputs`
+  at all — the engine is run server-side on the validated `inputs` and its
+  result is what is persisted, so a fabricated result cannot be saved under
+  approved decision ids; (2) validates `inputs` against `DcfInput` /
+  `CompsInput` / `SotpInput`, rejecting unknown keys; and (3) checks every
+  approved `approved_value` against the input field its `assumption_key`
+  governs (`ASSUMPTION_FIELD_MAP` in `backend/governance/run_computation.py`),
+  using the human's value after an `EDIT`, never the AI's. The order is
+  approval gate first, then input validation and computation, then the
+  assumption check, then the first write, so a rejected run leaves nothing
+  behind. Tested in `backend/tests/test_governed_run_integrity.py`
+  (forged outputs, mismatched values, per-method happy paths).
+  *Limits:* this guarantees outputs are a function of the stored inputs and
+  that approved numbers were the ones used. It does not verify that inputs
+  not tied to any decision (revenue, debt, the other schedules, ...) are
+  true, and a key with no input field to map to is gated but not
+  value-checked.
 - **`backend/governance/approval.py` never imports `backend.valuation`** —
   enforced by a structural test
   (`test_governance_module_never_imports_valuation_engine`), matching the
@@ -197,14 +217,17 @@ proposal into a persisted, human-actionable record.
 the next `ValuationRun.version` as `max(existing versions for this
 company+method) + 1`, and stores a full snapshot in `inputs["_governance_snapshot"]`
 (which `assumption_decision_ids` were consumed, the resolved
-`assumptions_used` values, and an optional `source_data_version` blob for
-peer-set/methodology/filing references) alongside the caller-supplied
-`inputs`/`outputs` from the Phase 5 engine call. `diff_runs(run_a, run_b)` is
+`assumptions_used` values, which of them were `assumptions_verified` against
+which input field, the `assumptions_unmapped` keys that had no field to check,
+and an optional `source_data_version` blob for peer-set/methodology/filing
+references) alongside the validated `inputs` and the engine `outputs` the
+server computed from them. `diff_runs(run_a, run_b)` is
 a pure, deterministic, template-based comparison (no LLM call): it flattens
 both runs' `inputs`/`outputs` into dotted-key maps, reports every field whose
 value differs, and separately highlights a curated subset of well-known
-assumption/output fields (`wacc`, `terminal_growth_rate`, `peer_multiple`,
-`sotp_value`, `per_share_value`, etc.) as `key_changes`.
+assumption/output fields (`wacc`, `terminal_growth_rate`,
+`chosen_multiple_value`, `enterprise_value`, `equity_value`,
+`implied_price_per_share`, etc.) as `key_changes`.
 
 ## Audit trail retrieval (Phase 7)
 

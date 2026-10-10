@@ -334,6 +334,11 @@ Built (backend wiring only; frontend review UI deferred to Phase 9):
   assumption values/source-data version produced it. `diff_runs()` is a pure,
   deterministic (no AI) flattened-field comparison between two runs for the
   same company, highlighting key assumption/output field changes.
+  *Later hardening:* `execute_valuation_run()` no longer accepts `outputs`
+  from the caller — it validates `inputs`, runs the engine server-side
+  (`backend/governance/run_computation.py`) and persists the engine's
+  result, and rejects approved values that differ from the input fields
+  they govern.
 - `backend/audit/logger.py` — `log_event()` is the single write path for
   `AuditLogEntry` (append-only); `get_audit_trail()` returns a
   chronologically ordered, role-tagged (`AI_INTERPRETATION` / `INPUT` /
