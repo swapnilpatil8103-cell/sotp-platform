@@ -162,6 +162,11 @@ Run tests:
 cd backend
 pytest                      # unit tests only need no external services
 pytest -m integration       # also hits live SEC EDGAR (needs SEC_USER_AGENT)
+
+# Run the suite on Postgres instead of per-test SQLite. Use a throwaway database
+# whose name ends in "_test": every test drops and recreates all of its tables.
+# (DATABASE_URL is ignored by the tests; TEST_DATABASE_URL is the switch.)
+TEST_DATABASE_URL=postgresql://user:pw@localhost:5432/sotp_test pytest -m "not integration"
 ```
 
 ### CI and containers
@@ -189,9 +194,15 @@ image. Create a login once the stack is up (prompts for the password):
 ```bash
 docker compose exec backend python scripts/create_user.py --email you@example.com
 ```
- These files were written without Docker
-available and the workflow has not yet run on GitHub, so treat the first run as
-the real test.
+
+**What has been verified.** The workflow has run on GitHub for every push to
+`main`; backend, web and audit all pass. Docker itself was not available when
+this was written, so the Dockerfiles and `docker-compose.yml` have **not been
+built or run**. Instead the same steps were run directly against a fresh
+Postgres 16 database with the compose environment (migrations from scratch,
+`/health`, `/login`, `create_user.py`, sign-in through the web proxy over plain
+http, loading a company), and they work; `API_BASE_URL` is read at runtime. The
+first real `docker compose up` is still the test of the image files.
 
 ### Frontend (Next.js)
 
@@ -272,6 +283,6 @@ All 10 phases complete as scoped. Backend: 585 unit/router tests +
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
 is PARTIAL: login, sessions and live user checks built; no password reset or SSO). CI and containers are in place (see "CI and containers" below; item 40 is
-PARTIAL: unverified on GitHub/Docker, no CD) — see
+PARTIAL: CI green on GitHub, Docker images never built, no CD) — see
 `docs/definition-of-done.md` for the itemized final status of every
 Definition-of-Done requirement, including what's PARTIAL or NOT DONE.

@@ -14,7 +14,7 @@ WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY --from=build /app/.next ./.next
+COPY --chown=node:node --from=build /app/.next ./.next
 COPY next.config.js ./
 USER node
 EXPOSE 3000
