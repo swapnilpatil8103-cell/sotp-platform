@@ -128,6 +128,30 @@ pytest                      # unit tests only need no external services
 pytest -m integration       # also hits live SEC EDGAR (needs SEC_USER_AGENT)
 ```
 
+### CI and containers
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+- **backend**: Python 3.13, `pip install -r backend/requirements.txt`,
+  `pytest -m "not integration"` with a dummy `SEC_USER_AGENT` (the integration
+  tests call real SEC EDGAR and are excluded).
+- **web**: Node 20, `npm ci`, `npx tsc --noEmit`, `npm run build` in `apps/web`.
+- **audit**: `npm audit --omit=dev --audit-level=high`.
+
+Run the whole stack (Postgres 16 + backend + web) with Docker:
+
+```bash
+# .env needs AUTH_JWT_SECRET (>= 32 chars); see .env.example
+docker compose up --build
+```
+
+The backend container applies the Alembic migrations on start, then serves on
+port 8000; the web app is on port 3000. `NEXT_PUBLIC_API_BASE_URL` and
+`NEXT_PUBLIC_API_TOKEN` are inlined into the web bundle at **build** time, so
+change them in `.env` and rebuild. These files were written without Docker
+available and the workflow has not yet run on GitHub, so treat the first run as
+the real test.
+
 ### Frontend (Next.js)
 
 Node.js/npm are available in this dev environment (verify with `node -v` /
@@ -205,6 +229,7 @@ All 10 phases complete as scoped. Backend: 531 unit/router tests +
 12 integration tests (real SEC EDGAR calls, `-m integration`), 543 in total, all passing.
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
-is PARTIAL: no login flow yet). Deployment configs and CI were not built — see
+is PARTIAL: no login flow yet). CI and containers are in place (see "CI and containers" below; item 40 is
+PARTIAL: unverified on GitHub/Docker, no CD) — see
 `docs/definition-of-done.md` for the itemized final status of every
 Definition-of-Done requirement, including what's PARTIAL or NOT DONE.
