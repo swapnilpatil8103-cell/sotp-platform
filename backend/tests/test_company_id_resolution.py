@@ -11,8 +11,9 @@ from fastapi.testclient import TestClient
 
 from backend.api import deps
 from backend.api.main import app
+from backend.tests.fixtures.auth import auth_headers
 
-client = TestClient(app)
+client = TestClient(app, headers=auth_headers())
 
 
 class _FakeSECConnector:

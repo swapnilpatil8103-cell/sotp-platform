@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ApiError, getCompanyId } from "@/lib/api";
+import { ApiError, authHeaders, getCompanyId } from "@/lib/api";
 import type { AssumptionDecisionOut, ValueUnlockProposeResponse } from "@/lib/types";
 import { AIPanel, Card, ErrorState, SectionHeading, Table } from "@/components/ui";
 
@@ -62,7 +62,7 @@ export default function ValueUnlockPage({ params }: { params: { ticker: string }
       });
       const res = await fetch(`${BASE()}/scenarios/value-unlock/propose?${qp.toString()}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(sotpBreakdown),
       });
       if (!res.ok) {
@@ -81,8 +81,8 @@ export default function ValueUnlockPage({ params }: { params: { ticker: string }
     try {
       const res = await fetch(`${BASE()}/valuation/assumptions/${decisionId}/decide`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision, user_id: "analyst:web-ui", reason: `${decision} via Value Unlock UI` }),
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ decision, reason: `${decision} via Value Unlock UI` }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));

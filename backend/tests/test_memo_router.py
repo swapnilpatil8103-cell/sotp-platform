@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.api import deps
 from backend.api.main import app
+from backend.tests.fixtures.auth import auth_headers
 from backend.ai.testing import FakeAIAdapter
 from backend.api.routers import memo as memo_router
 from backend.db import get_engine
@@ -14,7 +15,7 @@ from backend.models.enums import ValuationMethod
 from backend.models.valuation_run import ValuationRun
 from sqlmodel import Session
 
-client = TestClient(app)
+client = TestClient(app, headers=auth_headers())
 
 
 class _FakeSECConnector:

@@ -5,8 +5,9 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.tests.fixtures.auth import auth_headers
 
-client = TestClient(app)
+client = TestClient(app, headers=auth_headers())
 
 
 def test_post_valuation_sotp_computes_result():

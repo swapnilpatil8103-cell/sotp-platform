@@ -19,12 +19,13 @@ from backend.governance import approval
 from backend.governance.valuation_run import execute_valuation_run, list_versions
 from backend.models.enums import ValuationMethod
 from backend.schemas.valuation import CompsInput, DcfInput, SotpInput
+from backend.tests.fixtures.auth import auth_headers
 from backend.tests.fixtures.run_inputs import comps_inputs, dcf_inputs, sotp_inputs
 from backend.valuation.comps import run_comps
 from backend.valuation.dcf import run_dcf
 from backend.valuation.sotp import run_sotp
 
-client = TestClient(app)
+client = TestClient(app, headers=auth_headers("analyst@firm.com"))
 
 ANALYST = "analyst@firm.com"
 
@@ -58,7 +59,6 @@ def _post_run(company_id, method, decision_ids, inputs, **extra):
         "method": method,
         "decision_ids": decision_ids,
         "inputs": inputs,
-        "created_by": ANALYST,
         **extra,
     }
     return client.post("/valuation/run", json=body)

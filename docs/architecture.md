@@ -20,8 +20,12 @@ out explicitly below rather than glossed over.
 - **`api/`** — HTTP boundary. FastAPI routers (`api/routers/*.py`), request
   validation via Pydantic, dependency-injected clients (`api/deps.py`).
   Contains no business logic itself; delegates to `services`/`data`/
-  `valuation`/`governance`. No auth layer exists (never in scope for
-  Phases 1–9 — see the Definition-of-Done audit). One narrow concurrency
+  `valuation`/`governance`. Every router except `/health` is mounted behind a
+  JWT Bearer dependency (`deps.get_current_user`, attached in `main.py` so new
+  routes are protected by default); `deps.require_analyst` additionally gates
+  the decide and run endpoints, and the approver / run author / audit actor
+  are taken from the token subject, never the request body. There is no login
+  flow yet (Definition-of-Done item 39 is PARTIAL). One narrow concurrency
   exception: `api/routers/segments.py`'s `get_company_segments` runs
   `SECConnector.get_latest_filings` (submissions) and `get_company_facts`
   on a `concurrent.futures.ThreadPoolExecutor` since neither depends on the
@@ -285,12 +289,16 @@ no-paid-dependency principle.
   `generate_memo_section`) exists and is unit-tested, but no router
   assembles a full memo from it; the endpoint remains a `501` stub and the
   frontend renders a graceful "not yet implemented" state.
-- **No authentication, rate limiting beyond SEC's own, deployment configs,
-  or Alembic migration CI landed.** These were scoped as a distinct
-  hardening/deployment phase in the original plan and were consciously
-  descoped from the 10 phases actually executed — see the
-  Definition-of-Done audit (`docs/definition-of-done.md`) for the honest
-  accounting of what's DONE vs PARTIAL vs NOT DONE.
+- **No rate limiting beyond SEC's own, deployment configs, or Alembic
+  migration CI landed, and authentication is only partly built.** These were
+  scoped as a distinct hardening/deployment phase in the original plan and
+  were consciously descoped from the 10 phases actually executed.
+  Authentication was added afterwards (JWT Bearer on every router except
+  `/health`, an `analyst` role for decide/run, identity from the token) but
+  has no login endpoint, user store or token refresh, and the web app's token
+  is a build-time env var — see the Definition-of-Done audit
+  (`docs/definition-of-done.md`) for the honest accounting of what's DONE vs
+  PARTIAL vs NOT DONE.
 
 ## Request flow (typical: ticker → SOTP valuation)
 

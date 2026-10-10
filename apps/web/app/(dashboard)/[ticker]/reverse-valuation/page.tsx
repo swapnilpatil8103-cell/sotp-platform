@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError } from "@/lib/api";
+import { ApiError, authHeaders } from "@/lib/api";
 import type { DcfInput, ReverseValuationResult } from "@/lib/types";
 import { Card, ClassificationBadge, ErrorState, MetricCard, SectionHeading } from "@/components/ui";
 
@@ -45,7 +45,7 @@ export default function ReverseValuationPage({ params }: { params: { ticker: str
     try {
       const res = await fetch(`${base}/scenarios/reverse-valuation`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           base_dcf_input: BASE_DCF,
           target_enterprise_value: targetEv,

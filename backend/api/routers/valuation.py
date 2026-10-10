@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ValidationError
 from sqlmodel import Session
 
+from backend.api.deps import AuthenticatedUser, require_analyst
 from backend.audit.logger import get_audit_trail
 from backend.db import get_session
 from backend.governance import approval
@@ -256,14 +257,24 @@ def propose_assumption(payload: ProposeAssumptionRequest, session: Session = Dep
 
 
 @router.post("/assumptions/{decision_id}/decide", response_model=AssumptionDecisionOut)
-def decide_assumption(decision_id: int, payload: RecordDecisionRequest, session: Session = Depends(get_session)):
-    """Human submits APPROVE / EDIT / REJECT for a pending proposal."""
+def decide_assumption(
+    decision_id: int,
+    payload: RecordDecisionRequest,
+    user: AuthenticatedUser = Depends(require_analyst),
+    session: Session = Depends(get_session),
+):
+    """A human submits APPROVE / EDIT / REJECT for a pending proposal.
+
+    Requires the `analyst` role. The approver recorded in `decided_by` and in
+    the audit-log actor is the authenticated token subject; the request body
+    cannot name one.
+    """
     try:
         return approval.record_decision(
             session,
             decision_id=decision_id,
             decision=payload.decision,
-            user_id=payload.user_id,
+            user_id=user.subject,
             human_value=payload.human_value,
             reason=payload.reason,
         )
@@ -277,9 +288,16 @@ def list_assumptions(company_id: int, session: Session = Depends(get_session)):
 
 
 @router.post("/run", response_model=ValuationRunOut)
-def run_governed_valuation(payload: RunValuationRequest, session: Session = Depends(get_session)):
+def run_governed_valuation(
+    payload: RunValuationRequest,
+    user: AuthenticatedUser = Depends(require_analyst),
+    session: Session = Depends(get_session),
+):
     """Compute and persist a new versioned ValuationRun, gated on approved
     assumptions.
+
+    Requires the `analyst` role; `created_by` and the audit-log actor are the
+    authenticated token subject (the body cannot name one).
 
     The server never trusts a client-supplied result: the request carries no
     `outputs` (sending one is a 422), `inputs` is validated against
@@ -307,7 +325,7 @@ def run_governed_valuation(payload: RunValuationRequest, session: Session = Depe
             method=method,
             decision_ids=payload.decision_ids,
             inputs=payload.inputs,
-            created_by=payload.created_by,
+            created_by=user.subject,
             source_data_version=payload.source_data_version,
         )
     except RunRejectedError as exc:

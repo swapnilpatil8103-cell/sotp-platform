@@ -535,6 +535,11 @@ Authentication/authorization, rate limiting, observability, Alembic migration
 CI, deployment configs (Vercel for web, containerized FastAPI + Supabase for
 backend), end-to-end test suite in top-level `tests/`. Depends on: all prior
 phases.
+*Status:* authentication has been partly delivered outside the ten executed
+phases — JWT Bearer on every router except `/health`, an `analyst` role for
+decide/run, identity taken from the token (see `docs/api-documentation.md`
+"Authentication"). A login flow, rate limiting, deployment configs and CI
+remain undone.
 
 #### Phase 10 addition — SEC XBRL `frames` peer discovery (DONE)
 Automatic peer-data sourcing for comps, built on top of the real SEC XBRL

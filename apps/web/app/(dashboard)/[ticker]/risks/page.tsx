@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError } from "@/lib/api";
+import { ApiError, authHeaders } from "@/lib/api";
 import type { RiskDashboardResult } from "@/lib/types";
 import { AIBadge, Card, ErrorState, RiskBadge, SectionHeading } from "@/components/ui";
 
@@ -42,7 +42,7 @@ export default function RisksPage({ params }: { params: { ticker: string } }) {
     try {
       const res = await fetch(`${base}/scenarios/risk-dashboard?${qp.toString()}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ ticker }),
       });
       if (!res.ok) {

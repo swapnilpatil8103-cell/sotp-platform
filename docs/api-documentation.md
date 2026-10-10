@@ -32,11 +32,49 @@ default `{"detail": "..."}` shape unless noted.
   `/companies/{ticker}/segments`, `/companies/{ticker}/market-data`) and get
   back a computed result with no persistence.
 
+## Authentication
+
+Every endpoint **except `GET /health`** requires
+`Authorization: Bearer <JWT>`. The auth dependency
+(`backend/api/deps.py::get_current_user`) is attached to each router in
+`main.py` at `include_router` time, so every route in those routers — including
+routes added later — is protected by default.
+
+**Token.** HS256, signed with `AUTH_JWT_SECRET` (at least 32 characters).
+Required claims: `sub` (non-empty string, at most 256 characters — it is
+written into `decided_by` / `created_by`) and `exp`. Optional: `roles`, a list
+of strings. The algorithm is pinned server-side; unsigned (`alg: none`) and
+differently-signed tokens are rejected. Until a login flow exists, mint tokens
+with `python scripts/mint_dev_token.py --sub <id> [--roles analyst] [--hours N]`.
+
+| Status | When |
+|---|---|
+| `401` | No `Authorization` header, a non-`Bearer` scheme, or a token that is malformed, badly signed, expired, or missing `exp`/`sub`. Carries `WWW-Authenticate: Bearer`. |
+| `403` | A valid token without the role the endpoint requires. |
+| `503` | `AUTH_JWT_SECRET` is unset or shorter than 32 characters. The server fails closed and never lets an unauthenticated request through. |
+
+**Roles.** Only `POST /valuation/assumptions/{decision_id}/decide` and
+`POST /valuation/run` require the `analyst` role. Every other protected
+endpoint — including `POST /valuation/assumptions/propose` — is open to any
+authenticated user.
+
+**Identity comes from the token, never the body.** The token's `sub` is
+recorded as `AssumptionDecision.decided_by`, `ValuationRun.created_by`, and the
+`human:<sub>` actor in the audit log. The decide and run request bodies have no
+`user_id` / `created_by` field, and unknown body fields are forbidden, so a
+client that still sends one gets a `422` rather than having it ignored.
+**Breaking change:** both fields were previously required.
+
+CORS preflight (`OPTIONS`) is answered by the CORS middleware before auth and
+needs no token. The interactive docs (`/docs`, `/redoc`, `/openapi.json`) are
+not part of the routers and remain open.
+
 ---
 
 ## `GET /health`
 
-Health check. Returns `{"status": "ok"}`. No auth, no params.
+Health check. Returns `{"status": "ok"}`. The only endpoint that needs no
+token. No params.
 
 ---
 
@@ -268,15 +306,19 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
   Records an AI proposal; does not call AI itself (callers run a
   `backend.ai.tasks` function first).
 - **`POST /valuation/assumptions/{decision_id}/decide`** — body:
-  `RecordDecisionRequest` (`decision: APPROVE|EDIT|REJECT, user_id,
-  human_value, reason`) → updated `AssumptionDecisionOut`. `400` on
-  governance errors (e.g. deciding an already-decided proposal).
+  `RecordDecisionRequest` (`decision: APPROVE|EDIT|REJECT, human_value,
+  reason`) → updated `AssumptionDecisionOut`. **Requires the `analyst` role**
+  (`403` otherwise). The approver recorded in `decided_by` and the audit actor
+  is the token subject; there is no `user_id` field (sending one is a `422`).
+  `400` on governance errors (e.g. deciding an already-decided proposal).
 - **`GET /valuation/company/{company_id}/assumptions`** →
   `list[AssumptionDecisionOut]`.
 - **`POST /valuation/run`** — body: `RunValuationRequest` (`company_id,
-  method, decision_ids, inputs, created_by, source_data_version`)
-  → `ValuationRunOut`. Computes and persists a new versioned
-  `ValuationRun`, gated on every `decision_ids` entry being
+  method, decision_ids, inputs, source_data_version`)
+  → `ValuationRunOut`. **Requires the `analyst` role** (`403` otherwise); the
+  run's `created_by` and audit actor are the token subject (there is no
+  `created_by` field; sending one is a `422`). Computes and persists a new
+  versioned `ValuationRun`, gated on every `decision_ids` entry being
   `APPROVED`/`OVERRIDDEN` for that company.
   **The server never trusts a client-supplied result.** The request has no
   `outputs`; unknown body fields are forbidden, so sending `outputs` is a

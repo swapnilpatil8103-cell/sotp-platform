@@ -39,8 +39,13 @@ class AssumptionDecisionOut(BaseModel):
 
 
 class RecordDecisionRequest(BaseModel):
+    """There is intentionally no ``user_id``: the approver is the authenticated
+    token subject, never a client-supplied string. Extras are forbidden so a
+    client that still sends one gets a 422 instead of it being silently ignored."""
+
+    model_config = {"extra": "forbid"}
+
     decision: str = Field(..., description="APPROVE | EDIT | REJECT")
-    user_id: str
     human_value: Optional[float] = Field(default=None, description="Required for EDIT")
     reason: Optional[str] = None
 
@@ -48,7 +53,9 @@ class RecordDecisionRequest(BaseModel):
 class RunValuationRequest(BaseModel):
     """There is intentionally no ``outputs`` field and extras are forbidden: the
     server computes outputs itself from ``inputs``, so a client that sends its
-    own ``outputs`` gets a 422 rather than having them silently ignored."""
+    own ``outputs`` gets a 422 rather than having them silently ignored.
+    There is likewise no ``created_by``: the run's author is the authenticated
+    token subject."""
 
     model_config = {"extra": "forbid"}
 
@@ -62,7 +69,6 @@ class RunValuationRequest(BaseModel):
             "(unknown keys are rejected). Approved assumption values must match the corresponding input fields."
         ),
     )
-    created_by: str
     source_data_version: Optional[dict[str, Any]] = None
 
 

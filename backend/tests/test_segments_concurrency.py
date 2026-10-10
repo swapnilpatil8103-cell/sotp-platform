@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.deps import get_sec_client
 from backend.api.main import app
+from backend.tests.fixtures.auth import auth_headers
 from backend.services.sec_client import SECConnector, _RateLimiter
 
 
@@ -204,7 +205,7 @@ def test_segments_endpoint_uses_concurrent_fetch_and_matches_sequential_result(r
     # `_test_database` fixture (backend/tests/conftest.py) already points
     # DATABASE_URL at a throwaway per-test SQLite file for every test.
     try:
-        client = TestClient(app)
+        client = TestClient(app, headers=auth_headers())
         resp = client.get("/companies/TESTCO/segments")
         assert resp.status_code == 200, resp.text
         body = resp.json()

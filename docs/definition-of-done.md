@@ -43,7 +43,7 @@ Status legend: **DONE** / **PARTIAL** / **NOT DONE**.
 | 36 | Env setup documented | DONE | README "Environment variables" section covers every `.env.example` key and which are required for which subsystem (SEC vs DB vs AI). |
 | 37 | No secrets committed | DONE | See Secrets Check below — `.env` is gitignored, no hardcoded API keys/tokens found in any `.py`/`.ts`/`.tsx` source file. |
 | 38 | No fabricated numbers presented as real | DONE | `DataStatus.MISSING`/`CONFLICTING` are first-class, never silently defaulted; AI narrative validation (`ai/validation.py`) rejects/abstains on AI text containing numbers not traceable to a real input; value-unlock proposals store only categorical action codes, never AI-invented dollar amounts. |
-| 39 | Authentication | NOT DONE | Never in scope of the 10 phases as executed; explicitly deferred to a future hardening/deployment phase (see `docs/architecture.md` "Deviations"). |
+| 39 | Authentication | PARTIAL | **Built:** HS256 JWT Bearer auth (`AUTH_JWT_SECRET`, `backend/api/deps.py`) on every router except `/health`, applied at `include_router` time so new routes are protected by default; an `analyst` role required for `POST /valuation/assumptions/{id}/decide` and `POST /valuation/run`; `user_id`/`created_by` removed from request bodies (sending them is a `422`), so `decided_by`, `ValuationRun.created_by` and the `human:<sub>` audit actor all come from the token subject; fails closed (`503`) if the secret is unset or under 32 chars. Covered by `backend/tests/test_auth.py` (401 without a token on every route, 403 without the role, actor taken from the token). **Not built:** no login endpoint, user store, or token refresh/revocation (tokens are minted by `scripts/mint_dev_token.py`); the web app's token is a `NEXT_PUBLIC_` env var, so it is baked into the browser bundle (local development only); `/docs` and `/openapi.json` are open; `POST /valuation/assumptions/propose` is open to any authenticated user (only decide/run need the role). |
 | 40 | Deployment (CI, containers, Vercel/Supabase config) | NOT DONE | Same as above — no CI pipeline, Dockerfile, or Vercel config exists in this repo. Local dev + tests are fully documented and working; production deployment is out of scope as executed. |
 
 ## Secrets check (performed this phase)
@@ -83,10 +83,11 @@ Unit tests: `backend/tests/test_segment_valuation.py`,
 
 ## Summary
 
-Of 40 checklist items: **38 DONE**, **2 NOT DONE** (authentication,
-deployment/CI). Both remaining NOT DONE items were explicitly descoped in
-the original phase plan (auth/deployment were slated for an 11th
-"hardening" phase never executed). The two previously PARTIAL/NOT DONE
+Of 40 checklist items: **38 DONE**, **1 PARTIAL** (authentication, #39 —
+JWT auth and the analyst role gate are built, but there is no login flow),
+**1 NOT DONE** (deployment/CI, #40). Both were explicitly descoped in the
+original phase plan (auth/deployment were slated for an 11th "hardening"
+phase never executed); authentication was subsequently started. The two previously PARTIAL/NOT DONE
 items from the Phase 10 audit — ticker→company_id resolution (#2) and
 investment memo assembly (#27) — were closed in a final gap-closure pass:
 `GET /companies/{ticker}/id` (+ `company_id` on `GET /companies/{ticker}`)

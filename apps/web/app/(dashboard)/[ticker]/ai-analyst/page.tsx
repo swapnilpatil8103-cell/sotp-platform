@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ApiError, getCompanyId } from "@/lib/api";
+import { ApiError, authHeaders, getCompanyId } from "@/lib/api";
 import type { AssumptionDecisionOut, AuditTrailEntryOut } from "@/lib/types";
 import { AIBadge, AIPanel, Card, ErrorState, SectionHeading } from "@/components/ui";
 
@@ -53,7 +53,7 @@ export default function AiAnalystPage({ params }: { params: { ticker: string } }
     setError(null);
     setDecisions(null);
     try {
-      const res = await fetch(`${BASE()}/valuation/company/${companyId}/assumptions`);
+      const res = await fetch(`${BASE()}/valuation/company/${companyId}/assumptions`, { headers: authHeaders() });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new ApiError(res.status, body.detail ?? "Failed to load assumptions", body.detail);
@@ -71,7 +71,7 @@ export default function AiAnalystPage({ params }: { params: { ticker: string } }
     setExpanded((prev) => ({ ...prev, [id]: isOpen ? null : mode }));
     if (mode === "evidence" && !isOpen && !evidence[id]) {
       try {
-        const res = await fetch(`${BASE()}/valuation/company/${companyId}/audit-trail`);
+        const res = await fetch(`${BASE()}/valuation/company/${companyId}/audit-trail`, { headers: authHeaders() });
         if (res.ok) {
           const all: AuditTrailEntryOut[] = await res.json();
           setEvidence((prev) => ({ ...prev, [id]: all.filter((e) => e.entity_id === id) }));
@@ -86,8 +86,8 @@ export default function AiAnalystPage({ params }: { params: { ticker: string } }
     try {
       await fetch(`${BASE()}/valuation/assumptions/${id}/decide`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision: "REJECT", user_id: "analyst:web-ui", reason: "Challenged from AI Analyst panel" }),
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ decision: "REJECT", reason: "Challenged from AI Analyst panel" }),
       });
       load();
     } catch {

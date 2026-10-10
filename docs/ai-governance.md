@@ -171,7 +171,11 @@ proposal into a persisted, human-actionable record.
   again (`GovernanceError`) -- a correction requires a fresh `propose()`
   call, so there is never an ambiguous "which decision is authoritative"
   state. Writes `AuditLogEntry` (`action=DECISION_RECORDED`,
-  `actor="human:<user_id>"`).
+  `actor="human:<user_id>"`). Over HTTP, `user_id` is never client-supplied:
+  `POST /valuation/assumptions/{id}/decide` requires the `analyst` role and
+  passes the authenticated token's subject, so nobody can approve "as"
+  someone else (`backend/tests/test_auth.py`). The same holds for
+  `ValuationRun.created_by` on `POST /valuation/run`.
 - **The enforcement mechanism (concretely).** No function in
   `backend/governance/` or `backend/valuation/` will accept an assumption
   value straight from an `AssumptionDecision.ai_recommended_value` field.

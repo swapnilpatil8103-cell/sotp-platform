@@ -41,6 +41,18 @@ const BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ??
   "http://localhost:8000";
 
+// Bearer token for the backend's JWT auth. TODO(auth): this is a stopgap -- the
+// token comes from a build-time env var, so it is baked into the browser bundle
+// and visible to anyone who can load the app (fine for local development only).
+// Replace with a real login flow (obtain a short-lived token per signed-in user,
+// keep it out of the bundle, refresh/redirect to login on 401).
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN;
+
+/** `Authorization` header for backend calls. Use this on any direct `fetch`. */
+export function authHeaders(): Record<string, string> {
+  return API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
+}
+
 export class ApiError extends Error {
   status: number;
   detail?: string;
@@ -63,6 +75,7 @@ async function request<T>(
       ...init,
       headers: {
         "Content-Type": "application/json",
+        ...authHeaders(),
         ...(init?.headers ?? {}),
       },
       cache: "no-store",

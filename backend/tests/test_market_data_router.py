@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.api import deps
 from backend.api.main import app
+from backend.tests.fixtures.auth import auth_headers
 from backend.services.market_data_client import (
     DividendInfo,
     MarketDataNotFoundError,
@@ -13,7 +14,7 @@ from backend.services.market_data_client import (
     MarketDataUnavailableError,
 )
 
-client = TestClient(app)
+client = TestClient(app, headers=auth_headers())
 
 
 class _FakeMarketDataClient:

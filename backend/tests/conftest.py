@@ -15,6 +15,14 @@ from typing import Iterator
 
 import pytest
 
+from backend.tests.fixtures.auth import TEST_JWT_SECRET
+
+# Set at import time (not in a fixture) because test modules mint tokens at
+# module level, which happens during collection, before any fixture runs.
+# Unconditional on purpose: a real AUTH_JWT_SECRET exported from .env must not
+# leak into, or be required by, the test suite.
+os.environ["AUTH_JWT_SECRET"] = TEST_JWT_SECRET
+
 
 @pytest.fixture(autouse=True, scope="function")
 def _test_database(monkeypatch, tmp_path) -> Iterator[None]:

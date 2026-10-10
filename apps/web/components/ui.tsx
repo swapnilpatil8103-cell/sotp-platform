@@ -231,6 +231,13 @@ export function ErrorState({
     title = "Backend unavailable";
     body =
       "Could not reach the SOTP Intelligence API. Confirm the backend is running and NEXT_PUBLIC_API_BASE_URL is set correctly.";
+  } else if (status === 401) {
+    title = "Authentication required";
+    body =
+      "The backend rejected the request's credentials. Set NEXT_PUBLIC_API_TOKEN (a valid, unexpired Bearer token — see the README) and restart the web dev server.";
+  } else if (status === 403) {
+    title = "Not permitted";
+    body = error instanceof ApiError && error.detail ? error.detail : "Your account does not have the role required for this action.";
   } else if (status === 404) {
     title = "Not found";
   } else if (status === 501) {
