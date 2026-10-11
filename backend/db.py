@@ -16,6 +16,7 @@ Exposes:
 
 from __future__ import annotations
 
+import importlib.util
 import os
 from typing import Iterator, Optional
 
@@ -29,6 +30,22 @@ import backend.models  # noqa: F401
 _engine: Optional[Engine] = None
 
 
+def normalize_database_url(url: str) -> str:
+    """Pin a bare PostgreSQL URL to the psycopg2 driver this project installs.
+
+    ``postgresql://`` means "the dialect's default driver", and SQLAlchemy 2.1 changed
+    that default from psycopg2 to psycopg 3, so on a fresh install (which has
+    ``psycopg2-binary``, not ``psycopg``) the plain URL in .env.example, the README and
+    docker-compose fails with ``No module named 'psycopg'``. An explicit driver
+    (``postgresql+psycopg://...``) is left alone, as is any non-PostgreSQL URL, and
+    ``postgresql://`` is left as is if psycopg2 is not importable.
+    """
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix) and importlib.util.find_spec("psycopg2") is not None:
+            return "postgresql+psycopg2://" + url[len(prefix):]
+    return url
+
+
 def _database_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -36,7 +53,7 @@ def _database_url() -> str:
             "DATABASE_URL env var must be set (Postgres/Supabase connection string "
             "for real use, or a sqlite:// URL for tests/dev). See .env.example."
         )
-    return url
+    return normalize_database_url(url)
 
 
 def get_engine(echo: bool = False) -> Engine:

@@ -17,6 +17,7 @@ class LoginAttempt(SQLModel, table=True):
     # emails too, so it reveals nothing about which accounts exist.
     email_hash: str = Field(max_length=64, index=True)
     ip: str = Field(max_length=45, index=True)
-    # Naive UTC.
+    # Timezone-aware UTC (a timestamptz column on PostgreSQL; see migration a7b8c9d0e1f2).
+    # Always write aware values: sqlmodel >= 0.0.48 rejects naive ones.
     ts: datetime = Field(index=True)
     success: bool = Field(default=False)

@@ -25,7 +25,9 @@ target_metadata = SQLModel.metadata
 
 
 def _get_url() -> str:
-    return os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    from backend.db import normalize_database_url
+
+    return normalize_database_url(os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url"))
 
 
 def run_migrations_offline() -> None:

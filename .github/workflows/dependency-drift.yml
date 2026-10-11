@@ -1,0 +1,94 @@
+name: Dependency drift
+
+# Installs the LATEST release of every backend dependency (no pins, no upper bounds) and
+# runs the whole suite on SQLite and PostgreSQL, so a breaking release shows up here
+# within a week instead of as a surprise on someone's fresh install. The normal CI uses
+# the pinned set in backend/constraints.txt and will not notice these.
+#
+# When it fails: read the log, fix the code (or add/adjust an upper bound in
+# backend/requirements.txt), and regenerate backend/constraints.txt (see its header).
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write # to open one tracking issue when the run fails
+
+jobs:
+  latest-sqlite:
+    name: Latest dependencies (SQLite)
+    runs-on: ubuntu-latest
+    env:
+      SEC_USER_AGENT: "CI Dummy ci@example.com"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the newest version of everything
+        run: |
+          # Keep only the package names (and extras): drop every version specifier and bound.
+          sed -E 's/[[:space:]]*(>=|<=|==|~=|!=|<|>).*$//; /^[[:space:]]*(#|$)/d' backend/requirements.txt > latest.txt
+          cat latest.txt
+          pip install --upgrade -r latest.txt
+          pip list --format=freeze | tee installed.txt
+      - run: pytest -m "not integration"
+      - name: Report the versions that were tested
+        if: always()
+        run: pip list --format=freeze | grep -i -E '^(sqlmodel|sqlalchemy|fastapi|starlette|pydantic|pydantic[-_]core|alembic|uvicorn|psycopg2-binary)=='
+
+  latest-postgres:
+    name: Latest dependencies (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sotp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sotp_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SEC_USER_AGENT: "CI Dummy ci@example.com"
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sotp_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the newest version of everything
+        run: |
+          sed -E 's/[[:space:]]*(>=|<=|==|~=|!=|<|>).*$//; /^[[:space:]]*(#|$)/d' backend/requirements.txt > latest.txt
+          pip install --upgrade -r latest.txt
+      - run: pytest -m "not integration"
+
+  notify:
+    name: Open a tracking issue on failure
+    runs-on: ubuntu-latest
+    needs: [latest-sqlite, latest-postgres]
+    if: ${{ always() && (needs.latest-sqlite.result == 'failure' || needs.latest-postgres.result == 'failure') }}
+    steps:
+      - name: Create the issue unless one is already open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Dependency drift: the suite fails on the latest dependency versions"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq 'length')
+          if [ "$existing" = "0" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The weekly run installing unpinned latest versions failed: $RUN_URL
+
+          The pinned CI is unaffected. Find the release that broke us, fix the code or add an upper bound in \`backend/requirements.txt\`, then regenerate \`backend/constraints.txt\` (instructions in its header)."
+          else
+            echo "An open drift issue already exists; not creating another."
+          fi

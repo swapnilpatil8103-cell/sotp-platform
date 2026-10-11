@@ -1,8 +1,18 @@
-fastapi>=0.110
+# Direct dependencies, as compatible ranges. The five libraries below are where drift
+# has actually broken us (sqlmodel's timezone-aware datetime type, SQLAlchemy 2.1's new
+# default PostgreSQL driver), so each has an UPPER bound: a new major/minor is adopted
+# deliberately, not by whatever `pip install` resolves on the day.
+#
+# Reproducible installs (CI, Docker, anyone who wants the tested set):
+#     pip install -r backend/requirements.txt -c backend/constraints.txt
+# Regenerate constraints.txt, and see why, in backend/constraints.txt's header.
+fastapi>=0.110,<0.150
+starlette>=0.40,<2
+pydantic>=2.6,<3
+sqlmodel>=0.0.48,<0.1
+sqlalchemy>=2.0,<2.2
 uvicorn[standard]>=0.29
-sqlmodel>=0.0.16
 psycopg2-binary>=2.9
-pydantic>=2.6
 python-dotenv>=1.0
 pandas>=2.2
 numpy>=1.26

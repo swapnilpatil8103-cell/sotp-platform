@@ -235,17 +235,56 @@ pytest -m integration       # also hits live SEC EDGAR (needs SEC_USER_AGENT)
 # whose name ends in "_test": every test drops and recreates all of its tables.
 # (DATABASE_URL is ignored by the tests; TEST_DATABASE_URL is the switch.)
 TEST_DATABASE_URL=postgresql://user:pw@localhost:5432/sotp_test pytest -m "not integration"
+
+# Same pinned versions CI uses:
+pip install -r backend/requirements.txt -c backend/constraints.txt
 ```
 
 ### CI and containers
 
 `.github/workflows/ci.yml` runs on every push and pull request:
 
-- **backend**: Python 3.13, `pip install -r backend/requirements.txt`,
+- **backend** (SQLite) and **backend-postgres** (a `postgres:16` service, via
+  `TEST_DATABASE_URL`): Python 3.13,
+  `pip install -r backend/requirements.txt -c backend/constraints.txt`,
   `pytest -m "not integration"` with a dummy `SEC_USER_AGENT` (the integration
   tests call real SEC EDGAR and are excluded).
 - **web**: Node 20, `npm ci`, `npx tsc --noEmit`, `npm run build` in `apps/web`.
 - **audit**: `npm audit --omit=dev --audit-level=high`.
+
+`.github/workflows/dependency-drift.yml` runs every Monday (and on demand): it
+installs the **newest** version of every backend dependency, ignoring the pins and
+bounds, and runs the suite on SQLite and PostgreSQL. If that fails it opens one
+tracking issue. The normal CI only sees the pinned set, so this is what tells you a
+new release has broken something before a fresh install does.
+
+#### Dependencies and reproducible installs
+
+`backend/requirements.txt` lists the direct dependencies as ranges, with **upper
+bounds** on the libraries that have broken us (`fastapi`, `starlette`, `pydantic`,
+`sqlmodel`, `sqlalchemy`). `backend/constraints.txt` pins every package, direct and
+transitive, to the exact versions that passed the full suite on SQLite and PostgreSQL.
+CI and the backend Docker image install with both:
+
+```bash
+pip install -r backend/requirements.txt -c backend/constraints.txt
+```
+
+Without `-c` you get the newest versions that satisfy the bounds. To adopt newer
+versions on purpose, install into a fresh venv, run the suite (also with
+`TEST_DATABASE_URL`), then `pip freeze` into `constraints.txt` (steps in its header).
+Two drift problems this setup exists for: sqlmodel >= 0.0.48 rejects naive datetimes,
+and SQLAlchemy 2.1 defaults a bare `postgresql://` URL to the `psycopg` (v3) driver.
+The code now writes timezone-aware UTC everywhere and `backend/db.py` pins bare
+`postgresql://` URLs to `psycopg2`.
+
+**Timestamps on PostgreSQL.** Every timestamp column is `timestamptz` (migration
+`a7b8c9d0e1f2`). Before it, the columns were `timestamp without time zone`, and
+PostgreSQL stored an aware UTC value as the *session's* wall time: on a server whose
+TimeZone is not UTC (e.g. `Asia/Calcutta`) every stored time was shifted (00:00 UTC
+became 05:30). The migration converts existing rows by interpreting them in the
+session time zone, which recovers the original instants when the server's TimeZone has
+not changed since they were written; on a UTC server it changes nothing.
 
 Run the whole stack (Postgres 16 + backend + web) with Docker:
 
@@ -350,8 +389,8 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
 
 ## Status
 
-All 10 phases complete as scoped. Backend: 817 unit/router tests +
-12 integration tests (real SEC EDGAR calls, `-m integration`), 829 in total, all passing.
+All 10 phases complete as scoped. Backend: 838 unit/router tests (3 of them run only against PostgreSQL) +
+12 integration tests (real SEC EDGAR calls, `-m integration`), 850 in total, all passing.
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
 is PARTIAL: login, sessions and live user checks built; no password reset or SSO). CI and containers are in place (see "CI and containers" below; item 40 is

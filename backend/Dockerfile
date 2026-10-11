@@ -7,8 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY backend/requirements.txt backend/requirements.txt
-RUN pip install -r backend/requirements.txt
+COPY backend/requirements.txt backend/constraints.txt backend/
+# The tested versions (backend/constraints.txt), not whatever is newest today.
+RUN pip install -r backend/requirements.txt -c backend/constraints.txt
 
 COPY backend backend
 COPY scripts scripts

@@ -81,8 +81,17 @@ class ThrottledError(RuntimeError):
 
 
 def utcnow() -> datetime:
-    """Naive UTC, matching the ``login_attempt.ts`` column."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Timezone-aware UTC. ``login_attempt.ts`` is a timezone-aware column (sqlmodel >= 0.0.48
+    rejects naive values for plain ``datetime`` fields), so everything stored is aware UTC."""
+    return datetime.now(timezone.utc)
+
+
+def as_utc(value: datetime) -> datetime:
+    """Treat a naive datetime read back from a database with no timezone type (SQLite, or an
+    older sqlmodel) as the UTC it was stored as; convert an aware one to UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def email_hash(email: str, secret: str) -> str:
@@ -102,7 +111,7 @@ def _failure_times(session: Session, since: datetime, *, ehash: Optional[str] = 
         stmt = stmt.where(LoginAttempt.email_hash == ehash)
     if ip is not None:
         stmt = stmt.where(LoginAttempt.ip == ip)
-    return list(session.exec(stmt.order_by(LoginAttempt.ts)).all())
+    return [as_utc(t) for t in session.exec(stmt.order_by(LoginAttempt.ts)).all()]
 
 
 def _remaining(scope: Scope, times: list[datetime], now: datetime) -> float:
@@ -129,7 +138,7 @@ def is_trusted_ip(session: Session, ehash: str, ip: str, now: datetime) -> bool:
 
 def check(session: Session, ehash: str, ip: str, now: Optional[datetime] = None) -> None:
     """Raise ``ThrottledError`` if any scope is currently locked. Records nothing."""
-    now = now or utcnow()
+    now = as_utc(now) if now is not None else utcnow()
     since = now - WINDOW
     remaining = max(
         _remaining(PAIR, _failure_times(session, since, ehash=ehash, ip=ip), now),
@@ -152,14 +161,14 @@ def _cleanup(session: Session, now: datetime) -> None:
 
 
 def record_failure(session: Session, ehash: str, ip: str, now: Optional[datetime] = None) -> None:
-    now = now or utcnow()
+    now = as_utc(now) if now is not None else utcnow()
     _cleanup(session, now)
     session.add(LoginAttempt(email_hash=ehash, ip=ip, ts=now, success=False))
     session.commit()
 
 
 def record_success(session: Session, ehash: str, ip: str, now: Optional[datetime] = None) -> None:
-    now = now or utcnow()
+    now = as_utc(now) if now is not None else utcnow()
     _cleanup(session, now)
     # Forgive this (email, ip) pair's failures; other addresses' failures stand.
     session.exec(
