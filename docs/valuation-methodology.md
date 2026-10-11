@@ -202,6 +202,55 @@ The result includes every year's full projection row (revenue, EBIT, NOPAT,
 D&A, CapEx, NWC change, FCFF, discount factor, discounted FCFF) for audit
 trail.
 
+**Net working capital: two methods (exactly one is required).** The default,
+`nwc_change_pct_of_revenue`, is a per-year schedule: `NWC_i = revenue_i x pct_i`.
+It ties working-capital investment to the *level* of revenue, so a company whose
+growth has stopped keeps "investing" in working capital forever. The alternative,
+`nwc_pct_of_incremental_revenue` (one rate, `-1 <= rate <= 1`), ties it to the
+*change* in revenue, which is how working capital actually behaves:
+
+```
+NWC_i = rate x (revenue_i - revenue_(i-1))       revenue_0 = base_revenue
+```
+
+A shrinking year releases working capital (negative `NWC_i`); a rate of `0` is a
+valid method, not a missing one. Supplying both or neither is rejected (422). When the
+incremental method is used the Gordon Growth terminal value does **not** reuse the last
+explicit year's NWC investment, because that figure reflects that year's growth, not
+the perpetuity's. It uses steady-state investment at the terminal growth rate:
+
+```
+FCFF_(n+1) = (FCFF_n + NWC_n) x (1 + g)  -  rate x revenue_n x g
+TV         = FCFF_(n+1) / (WACC - g)
+```
+
+(the pre-NWC cash flow grows at `g`, and NWC investment is `rate x revenue_n x g`).
+Worked example: base 1,000, +10% for two years, EBIT margin 20%, tax 25%, D&A 5%,
+CapEx 6%, rate 0.15, WACC 10%, g 3%. Revenue 1,100 / 1,210; NWC 15 / 16.5; FCFF
+139 / 152.9; `FCFF_(n+1) = (152.9 + 16.5) x 1.03 - 0.15 x 1,210 x 0.03 = 169.037`;
+TV = 169.037 / 0.07 = 2,414.81 (the last-year-carried-forward figure would have been
+2,249.81); EV = 2,248.44. The default method is unchanged, and `DcfResult.terminal_fcff`
+reports the `FCFF_(n+1)` actually capitalised in either mode. The exit-multiple terminal
+value does not depend on the NWC method.
+
+**Non-fatal warnings.** `DcfResult.warnings` is a list of `{code, message}` objects
+(empty when nothing looks off). They flag an assumption to look at; they never change
+a figure and never block a result (`risk_free_rate` below is not used in any arithmetic).
+
+| Code | Raised when |
+|---|---|
+| `NEGATIVE_TERMINAL_FCFF` | `FCFF_(n+1) < 0` (the perpetuity subtracts value) |
+| `TERMINAL_VALUE_SHARE_HIGH` | discounted Gordon TV is more than 85% of EV (`terminal_value_share_of_ev`; skipped if EV is not positive) |
+| `EXIT_MULTIPLE_TERMINAL_VALUE_SHARE_HIGH` | the same test on the exit-multiple EV |
+| `TERMINAL_GROWTH_ABOVE_RISK_FREE` | an optional `risk_free_rate` is supplied and `terminal_growth_rate > risk_free_rate` |
+| `LOW_WACC` | `WACC < 5%` |
+| `THIN_WACC_SPREAD` | `0 < WACC - g < 2` percentage points (the TV explodes) |
+| `NEGATIVE_EQUITY_VALUE` | `equity_value < 0` |
+
+All comparisons are strict, and the thresholds are module constants in `dcf.py`.
+`risk_free_rate` is an optional input used only for the growth-versus-risk-free warning;
+it cannot be swept as a sensitivity axis because it never moves an output.
+
 ### 3. Comparable company analysis ("comps") (`backend/valuation/comps.py`)
 
 For an already-assembled peer set (peer selection happens upstream — this
@@ -219,7 +268,8 @@ EBIT, earnings or book value (and non-positive revenue) produce a negative
 "multiple" that says nothing about price relative to earnings and would drag
 the percentiles toward nonsense, so such a peer gets no value (`None`) for that
 multiple and drops out of that metric's statistics, while still counting for
-its other multiples. If every peer is excluded for a metric, that metric simply
+its other multiples. That omission is never silent: it is listed in
+`CompsResult.exclusions` as a `not_meaningful` exclusion (see below). If every peer is excluded for a metric, that metric simply
 has no statistics row. A *negative enterprise value* (net cash larger than
 market cap) is a numerator problem and is not excluded by this rule.
 
@@ -234,6 +284,38 @@ implied_equity = implied_EV - target_debt + target_cash
 implied_equity = target_metric * chosen_multiple       (equity-based multiples: P/E, P/B)
 implied_price  = implied_equity / target_diluted_shares_outstanding
 ```
+
+**Outlier trimming (optional, off by default) and exclusion reporting.** With
+`trim_outliers: true`, each multiple is trimmed independently by the interquartile
+rule. Over that multiple's usable (meaningful) values, `Q1` and `Q3` come from
+`numpy.percentile` (linear interpolation), `IQR = Q3 - Q1`, and a peer is excluded from
+*that multiple's* statistics if its value lies outside
+
+```
+[ Q1 - k x IQR ,  Q3 + k x IQR ]        k = iqr_multiplier, default 1.5, 0 < k <= 10
+```
+
+(a value exactly on a fence is kept; the fence is widened by a relative 1e-9 so that
+floating-point noise in identical values cannot manufacture an outlier). A peer that is
+an outlier on P/E is still used for EV/EBITDA. Worked example, EV/EBITDA of
+`[8, 9, 10, 11, 12, 40]`: `Q1 = 9.25`, `Q3 = 11.75`, `IQR = 2.5`, fences `[5.5, 15.5]`,
+so 40 is excluded and the statistics are computed over `[8, 9, 10, 11, 12]` (min 8, P25 9,
+median 10, P75 11, max 12) instead of (8, 9.25, 10.5, 11.75, 40).
+
+Safeguards: trimming needs at least 4 usable peers for a multiple, and is **skipped with a
+warning** (`TRIM_SKIPPED_TOO_FEW_PEERS`, `TRIM_SKIPPED_WOULD_LEAVE_TOO_FEW`) if it would
+leave fewer than 3; identical peers (`IQR = 0`) are never outliers; and trimming changes
+only the reported statistics. It never changes `chosen_multiple_value`, which remains an
+explicit upstream choice, so the implied valuation is identical with trimming on or off.
+
+Nothing is dropped silently. Every (peer, multiple) pair left out of a statistic appears in
+`CompsResult.exclusions` as `{peer, metric, reason, value, lower_bound, upper_bound, detail}`
+with `reason` one of `not_meaningful`, `iqr_outlier_low`, `iqr_outlier_high` (the fences are
+included for the outlier reasons). Each `MultipleStats` row carries `n_peers_used`,
+`n_not_meaningful` and `n_outliers_excluded`, which always sum to the number of peers supplied;
+`excluded_outlier_peer_count` is the number of distinct peers trimmed on at least one multiple.
+`CompsResult.warnings` also reports `FEW_PEERS` (fewer than 3 supplied),
+`CHOSEN_MULTIPLE_OUTSIDE_PEER_RANGE` and `CHOSEN_METRIC_HAS_NO_PEER_STATS`.
 
 **Peer sourcing.** Peer selection always happens upstream of `run_comps` and
 is always human-confirmed before use, but the *candidates* offered to a human
@@ -295,6 +377,16 @@ discount: **positive = the market trades below SOTP value (a discount);
 negative = it trades above (a premium)**. It is `None` if there is no market
 price or the implied price is not positive. Example: implied $11, market $10
 gives upside +10.0% and discount +9.09%.
+
+**Non-fatal warnings.** `SotpResult.warnings` (same `{code, message}` shape as the DCF's;
+never changes a figure):
+
+| Code | Raised when |
+|---|---|
+| `NEGATIVE_EQUITY_VALUE` | the selected-treatment equity value is below zero |
+| `NEGATIVE_SEGMENT_EV` | any segment's attributed EV is negative (names them) |
+| `OVERHEAD_NOT_DEDUCTED` | `corporate_overhead_annual > 0` under `direct_deduction`, which deducts none of it (the message gives the amount capitalising it would remove) |
+| `LARGE_GAP_TO_MARKET` | the implied price is more than 50% above or below the market price |
 
 ### 5. Sensitivity analysis (`backend/valuation/sensitivity.py`)
 

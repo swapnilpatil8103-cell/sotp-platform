@@ -350,8 +350,8 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
 
 ## Status
 
-All 10 phases complete as scoped. Backend: 749 unit/router tests +
-12 integration tests (real SEC EDGAR calls, `-m integration`), 761 in total, all passing.
+All 10 phases complete as scoped. Backend: 817 unit/router tests +
+12 integration tests (real SEC EDGAR calls, `-m integration`), 829 in total, all passing.
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
 is PARTIAL: login, sessions and live user checks built; no password reset or SSO). CI and containers are in place (see "CI and containers" below; item 40 is

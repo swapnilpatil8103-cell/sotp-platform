@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # --------------------------------------------------------------------------
 # WACC
@@ -35,6 +35,21 @@ class WaccResult(BaseModel):
     equity_weight: float
     debt_weight: float
     wacc: float
+
+
+# --------------------------------------------------------------------------
+# Non-fatal validation warnings
+# --------------------------------------------------------------------------
+
+
+class ModelWarning(BaseModel):
+    """A non-fatal observation about a result: the numbers are computed and returned,
+    but an analyst should look at the flagged assumption. ``code`` is a stable
+    identifier (for tests and the UI); ``message`` is the human explanation with the
+    offending figures filled in."""
+
+    code: str
+    message: str
 
 
 # --------------------------------------------------------------------------
@@ -71,8 +86,25 @@ class DcfInput(BaseModel):
     )
     da_pct_of_revenue: list[float] = Field(..., min_length=1, description="D&A as % of revenue, per forecast year")
     capex_pct_of_revenue: list[float] = Field(..., min_length=1, description="CapEx as % of revenue, per forecast year")
-    nwc_change_pct_of_revenue: list[float] = Field(
-        ..., min_length=1, description="Change in net working capital as % of revenue, per forecast year"
+    nwc_change_pct_of_revenue: Optional[list[float]] = Field(
+        None,
+        min_length=1,
+        description=(
+            "Change in net working capital as % of that year's revenue, per forecast year. Exactly one of "
+            "this and nwc_pct_of_incremental_revenue must be supplied."
+        ),
+    )
+    nwc_pct_of_incremental_revenue: Optional[float] = Field(
+        None,
+        ge=-1,
+        le=1,
+        description=(
+            "Alternative to nwc_change_pct_of_revenue: NWC investment = this fraction of the YEAR-OVER-YEAR "
+            "INCREASE in revenue (year 1 is measured against base_revenue), so a company that stops growing "
+            "stops investing in working capital. A single rate for all years, e.g. 0.15 = 15 cents of NWC per "
+            "extra dollar of revenue. The Gordon terminal value then uses a steady-state NWC investment "
+            "(this fraction x revenue x terminal_growth_rate) rather than the last explicit year's."
+        ),
     )
     wacc: float = Field(
         ..., gt=-1, description="Discount rate applied to projected FCFF and terminal value; must exceed -1 (1 + wacc is divided by)"
@@ -85,6 +117,15 @@ class DcfInput(BaseModel):
     investments: float = Field(0.0, description="Non-operating investments added in EV->equity bridge")
     minority_interest: float = Field(0.0, description="Minority interest deducted in EV->equity bridge")
     diluted_shares_outstanding: float = Field(..., gt=0)
+    risk_free_rate: Optional[float] = Field(
+        None,
+        ge=-0.1,
+        le=1,
+        description=(
+            "Optional, as a decimal. Used ONLY to raise a TERMINAL_GROWTH_ABOVE_RISK_FREE warning when "
+            "terminal_growth_rate exceeds it; it never enters the valuation arithmetic."
+        ),
+    )
     exit_multiple: Optional[float] = Field(
         None,
         gt=0,
@@ -109,14 +150,32 @@ class DcfInput(BaseModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _exactly_one_nwc_method(self) -> "DcfInput":
+        has_schedule = self.nwc_change_pct_of_revenue is not None
+        has_incremental = self.nwc_pct_of_incremental_revenue is not None
+        if has_schedule and has_incremental:
+            raise ValueError(
+                "Provide only one NWC method: nwc_change_pct_of_revenue (% of revenue per year) OR "
+                "nwc_pct_of_incremental_revenue (% of the increase in revenue), not both."
+            )
+        if not has_schedule and not has_incremental:
+            raise ValueError(
+                "Provide an NWC method: nwc_change_pct_of_revenue (a per-year schedule) or "
+                "nwc_pct_of_incremental_revenue (a single rate on the increase in revenue)."
+            )
+        return self
+
     def validate_lengths(self) -> None:
         n = len(self.revenue_growth_rates)
-        for name, seq in (
+        sequences = [
             ("ebit_margins", self.ebit_margins),
             ("da_pct_of_revenue", self.da_pct_of_revenue),
             ("capex_pct_of_revenue", self.capex_pct_of_revenue),
-            ("nwc_change_pct_of_revenue", self.nwc_change_pct_of_revenue),
-        ):
+        ]
+        if self.nwc_change_pct_of_revenue is not None:
+            sequences.append(("nwc_change_pct_of_revenue", self.nwc_change_pct_of_revenue))
+        for name, seq in sequences:
             if len(seq) != n:
                 raise ValueError(f"{name} must have the same length as revenue_growth_rates ({n}), got {len(seq)}")
 
@@ -158,6 +217,17 @@ class DcfResult(BaseModel):
     exit_multiple_equity_value: Optional[float] = None
     exit_multiple_implied_price_per_share: Optional[float] = None
 
+    # -- Additive diagnostics. Populated on every run; no existing field changes.
+    terminal_fcff: Optional[float] = Field(
+        None, description="FCFF_(n+1): the cash flow the Gordon Growth terminal value capitalises"
+    )
+    terminal_value_share_of_ev: Optional[float] = Field(
+        None, description="Discounted Gordon terminal value / enterprise value (None if EV is not positive)"
+    )
+    warnings: list[ModelWarning] = Field(
+        default_factory=list, description="Non-fatal validation warnings; empty when nothing looks off"
+    )
+
 
 # --------------------------------------------------------------------------
 # Comps
@@ -198,6 +268,26 @@ class MultipleStats(BaseModel):
     median: float
     p75: float
     max: float
+    # How the peer set behind these statistics was formed. n_peers_used + n_not_meaningful +
+    # n_outliers_excluded always equals the number of peers supplied.
+    n_peers_used: Optional[int] = None
+    n_not_meaningful: Optional[int] = Field(None, description="Peers with a non-positive/missing denominator for this multiple")
+    n_outliers_excluded: Optional[int] = Field(None, description="Peers trimmed by the IQR rule for this multiple")
+
+
+ExclusionReason = Literal["not_meaningful", "iqr_outlier_low", "iqr_outlier_high"]
+
+
+class PeerExclusion(BaseModel):
+    """One peer left out of one multiple's statistics, and why. Nothing is ever dropped without one of these."""
+
+    peer: str
+    metric: Literal["ev_to_revenue", "ev_to_ebitda", "ev_to_ebit", "price_to_earnings", "price_to_book"]
+    reason: ExclusionReason
+    value: Optional[float] = Field(None, description="The peer's multiple (None when it could not be computed)")
+    lower_bound: Optional[float] = Field(None, description="IQR fence used (outlier reasons only)")
+    upper_bound: Optional[float] = Field(None, description="IQR fence used (outlier reasons only)")
+    detail: str
 
 
 class CompsInput(BaseModel):
@@ -215,6 +305,15 @@ class CompsInput(BaseModel):
     target_diluted_shares_outstanding: float = Field(..., gt=0)
     chosen_multiple_metric: Literal["ev_to_revenue", "ev_to_ebitda", "ev_to_ebit", "price_to_earnings", "price_to_book"]
     chosen_multiple_value: float = Field(..., description="The specific multiple value to apply, e.g. peer median EV/EBITDA")
+    trim_outliers: bool = Field(
+        False,
+        description=(
+            "If true, for each multiple separately, peers outside [Q1 - k*IQR, Q3 + k*IQR] are left out of that "
+            "multiple's statistics (and listed in ``exclusions``). Needs at least 4 usable peers, and is skipped "
+            "(with a warning) if it would leave fewer than 3. Never changes chosen_multiple_value."
+        ),
+    )
+    iqr_multiplier: float = Field(1.5, gt=0, le=10, description="k in the IQR fence; 1.5 is the conventional value")
 
 
 class CompsResult(BaseModel):
@@ -224,6 +323,12 @@ class CompsResult(BaseModel):
     implied_enterprise_value: Optional[float] = None
     implied_equity_value: float
     implied_price_per_share: float
+    exclusions: list[PeerExclusion] = Field(
+        default_factory=list,
+        description="Every (peer, multiple) pair left out of the statistics, with the reason. Always reported.",
+    )
+    excluded_outlier_peer_count: int = Field(0, description="Distinct peers trimmed as IQR outliers on at least one multiple")
+    warnings: list[ModelWarning] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -283,6 +388,7 @@ class SotpResult(BaseModel):
     upside_downside_pct: Optional[float] = Field(
         None, description="(implied - market) / market * 100: move from the market price needed to reach SOTP value"
     )
+    warnings: list[ModelWarning] = Field(default_factory=list, description="Non-fatal validation warnings")
 
 
 # --------------------------------------------------------------------------
@@ -305,6 +411,7 @@ DcfScalarField = Literal[
     "minority_interest",
     "diluted_shares_outstanding",
     "exit_multiple",
+    "nwc_pct_of_incremental_revenue",
 ]
 DcfSensitivityOutput = Literal[
     "enterprise_value",

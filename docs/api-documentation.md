@@ -425,7 +425,9 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
 - **`POST /valuation/sotp`** — body: `SotpInput` (segments with EV +
   ownership %, cash, debt, minority interest, overhead treatment, diluted
   shares) → `SotpResult` (segment attributed EVs, equity value under both
-  overhead treatments, implied price/share, conglomerate discount % = (implied - market) / implied, positive = market below SOTP; plus upside/downside % vs market).
+  overhead treatments, implied price/share, conglomerate discount % = (implied - market) / implied, positive = market below SOTP; plus upside/downside % vs market;
+  and `warnings`: `NEGATIVE_EQUITY_VALUE`, `NEGATIVE_SEGMENT_EV`, `OVERHEAD_NOT_DEDUCTED`,
+  `LARGE_GAP_TO_MARKET`).
   `400` on invalid input (e.g. length mismatches, non-positive shares).
 - **`POST /valuation/dcf`** — body: `DcfInput` (base revenue, per-year
   growth/margin/D&A/capex/NWC schedules, WACC, terminal growth, bridge
@@ -444,6 +446,16 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
   Optional `mid_year_convention` (bool, default `false`) discounts FCFF at
   `t - 0.5` and the Gordon terminal value at `N - 0.5`; the exit-multiple
   terminal value stays at `N`. Omitting it changes nothing.
+  **NWC method (exactly one is required, else `422`):** `nwc_change_pct_of_revenue`
+  (per-year list, the original method) or `nwc_pct_of_incremental_revenue` (one rate in
+  `[-1, 1]` applied to the year-over-year increase in revenue; the Gordon terminal
+  value then uses steady-state NWC, see `docs/valuation-methodology.md`). Optional
+  `risk_free_rate` only feeds a warning. The response gains `terminal_fcff`,
+  `terminal_value_share_of_ev` and `warnings` (a list of `{code, message}`; empty when
+  nothing looks off, and never affecting a figure): `NEGATIVE_TERMINAL_FCFF`,
+  `TERMINAL_VALUE_SHARE_HIGH` (> 85% of EV), `EXIT_MULTIPLE_TERMINAL_VALUE_SHARE_HIGH`,
+  `TERMINAL_GROWTH_ABOVE_RISK_FREE`, `LOW_WACC` (< 5%), `THIN_WACC_SPREAD` (< 2 points),
+  `NEGATIVE_EQUITY_VALUE`.
   `400` when the inputs pass validation but cannot be computed: mismatched
   schedule lengths (`DcfInput.validate_lengths()`), `wacc <= terminal_growth_rate`,
   an arithmetic failure (`ZeroDivisionError` / `OverflowError`, e.g. `wacc`
@@ -461,7 +473,14 @@ capex, assets where disclosed) by parsing the company's most recent 10-K's
   multiple (`null` in `peer_multiples`) and so never enters the min / 25th /
   median / 75th / max statistics. `422` on schema violations (including
   `NaN`/`Infinity`), `400` on e.g. a target with no value for the chosen
-  metric.
+  metric. Optional `trim_outliers` (default `false`) and `iqr_multiplier` (default
+  1.5, `0 < k <= 10`) drop IQR outliers from each multiple's statistics (never from
+  the chosen multiple). Nothing is dropped silently: the response lists every
+  (peer, multiple) left out in `exclusions` (`reason` is `not_meaningful`,
+  `iqr_outlier_low` or `iqr_outlier_high`, with the fences for outliers), each
+  `stats` row carries `n_peers_used` / `n_not_meaningful` / `n_outliers_excluded`,
+  `excluded_outlier_peer_count` counts distinct trimmed peers, and `warnings`
+  reports skipped trimming, too few peers and a chosen multiple outside the peer range.
 - **`POST /valuation/sensitivity/dcf`** — body: `{base_dcf_input: dict,
   row_field, row_values, col_field, col_values, output_field}` → grid of
   `output_field` varying two DCF input fields (one DCF run per cell).

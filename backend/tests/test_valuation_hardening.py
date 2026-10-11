@@ -371,8 +371,12 @@ def _scalar_float_fields(model) -> set[str]:
 
 def test_sensitivity_field_literal_matches_the_scalar_dcf_input_fields():
     """The static Literal must not drift from DcfInput (a new scalar input
-    would silently be un-sweepable; a removed one would become a 400)."""
-    assert set(typing.get_args(DcfScalarField)) == _scalar_float_fields(DcfInput)
+    would silently be un-sweepable; a removed one would become a 400).
+
+    risk_free_rate is the one deliberate exception: it only drives a warning and
+    never enters the arithmetic, so sweeping it would produce a flat grid."""
+    not_sweepable = {"risk_free_rate"}
+    assert set(typing.get_args(DcfScalarField)) == _scalar_float_fields(DcfInput) - not_sweepable
 
 
 def test_sensitivity_output_literal_names_real_scalar_dcf_result_fields():
@@ -392,15 +396,28 @@ _AXIS_VALUES = {
     "minority_interest": [0.0, 5.0],
     "diluted_shares_outstanding": [90.0, 100.0],
     "exit_multiple": [8.0, 10.0],
+    "nwc_pct_of_incremental_revenue": [0.10, 0.20],
 }
+
+
+def _incremental_nwc_base() -> dict:
+    """A base case that uses the incremental-NWC method instead of the per-year schedule."""
+    base = dcf_inputs()
+    base.pop("nwc_change_pct_of_revenue")
+    base["nwc_pct_of_incremental_revenue"] = 0.15
+    return base
 
 
 @pytest.mark.parametrize("field", typing.get_args(DcfScalarField))
 def test_every_allowed_axis_field_works(field):
     other = "tax_rate" if field == "wacc" else "wacc"
+    # The incremental-NWC rate can only be swept when the base case uses that method.
+    extra = {"base_dcf_input": _incremental_nwc_base()} if field == "nwc_pct_of_incremental_revenue" else {}
     resp = client.post(
         SENS,
-        json=_sens(row_field=field, row_values=_AXIS_VALUES[field], col_field=other, col_values=_AXIS_VALUES[other]),
+        json=_sens(
+            row_field=field, row_values=_AXIS_VALUES[field], col_field=other, col_values=_AXIS_VALUES[other], **extra
+        ),
     )
     assert resp.status_code == 200, resp.text
     matrix = resp.json()["matrix"]

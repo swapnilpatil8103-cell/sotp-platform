@@ -9,7 +9,7 @@ import type {
   SotpResult,
   SotpSegmentInput,
 } from "@/lib/types";
-import { AIBadge, Card, ErrorState, MetricCard, SectionHeading } from "@/components/ui";
+import { AIBadge, Card, ErrorState, MetricCard, SectionHeading, WarningList } from "@/components/ui";
 import { SotpWaterfallChart } from "@/components/charts";
 
 const DEFAULT_SEGMENTS: SotpSegmentInput[] = [
@@ -272,6 +272,7 @@ export default function SotpPage({ params }: { params: Promise<{ ticker: string 
               }
             />
           </div>
+          <WarningList warnings={result.warnings} />
           <Card title="SOTP Bridge Waterfall">
             <SotpWaterfallChart result={result} />
           </Card>

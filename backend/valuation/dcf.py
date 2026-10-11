@@ -11,6 +11,18 @@ where total_debt is GROSS debt (not net of cash -- cash is added back exactly
 once, via cash_and_equivalents). This matches SotpInput's bridge.
 Equity value / diluted shares = implied price per share.
 
+Net working capital investment is, by default, a per-year percentage of that year's
+revenue (``nwc_change_pct_of_revenue``). Alternatively ``nwc_pct_of_incremental_revenue``
+sets it to a fraction of the year-over-year INCREASE in revenue (year 1 against
+``base_revenue``). In that mode the Gordon terminal value uses a steady-state NWC
+investment, rate x revenue_n x g, instead of the last explicit year's, because the
+last explicit year's investment reflects that year's growth, not the perpetuity's.
+
+Non-fatal warnings (``DcfResult.warnings``) flag assumptions an analyst should look at:
+a negative terminal cash flow, a terminal value above 85% of enterprise value, terminal
+growth above a supplied risk-free rate, WACC below 5%, a WACC-g spread under 2 points,
+and a negative equity value. They never change a number.
+
 Discounting is end-of-year (period t) by default. With
 ``mid_year_convention=True`` the year-t FCFF is discounted at t - 0.5 and the
 Gordon Growth terminal value at N - 0.5 (it is a perpetuity of mid-year flows);
@@ -20,8 +32,14 @@ the Exit Multiple terminal value, a year-end sale price, stays at N.
 from __future__ import annotations
 
 import math
+from typing import Optional
 
-from backend.schemas.valuation import DcfInput, DcfResult, DcfYearProjection
+from backend.schemas.valuation import DcfInput, DcfResult, DcfYearProjection, ModelWarning
+
+# Thresholds for the non-fatal warnings. Warnings never alter any figure.
+TERMINAL_VALUE_SHARE_WARN = 0.85  # discounted TV / EV above this
+LOW_WACC_WARN = 0.05  # WACC below this
+THIN_SPREAD_WARN = 0.02  # WACC - terminal growth below this
 
 
 def _project_year(
@@ -30,7 +48,8 @@ def _project_year(
     ebit_margin: float,
     da_pct: float,
     capex_pct: float,
-    nwc_change_pct: float,
+    nwc_change_pct: Optional[float],
+    nwc_pct_of_incremental: Optional[float],
     tax_rate: float,
     year_index: int,
 ) -> DcfYearProjection:
@@ -39,7 +58,10 @@ def _project_year(
     nopat = ebit * (1 - tax_rate)
     da = revenue * da_pct
     capex = revenue * capex_pct
-    nwc_change = revenue * nwc_change_pct
+    if nwc_pct_of_incremental is not None:
+        nwc_change = nwc_pct_of_incremental * (revenue - prior_revenue)
+    else:
+        nwc_change = revenue * nwc_change_pct
     fcff = nopat + da - capex - nwc_change
 
     return DcfYearProjection(
@@ -118,7 +140,8 @@ def _run_dcf(inputs: DcfInput) -> DcfResult:
             ebit_margin=inputs.ebit_margins[i],
             da_pct=inputs.da_pct_of_revenue[i],
             capex_pct=inputs.capex_pct_of_revenue[i],
-            nwc_change_pct=inputs.nwc_change_pct_of_revenue[i],
+            nwc_change_pct=inputs.nwc_change_pct_of_revenue[i] if inputs.nwc_change_pct_of_revenue is not None else None,
+            nwc_pct_of_incremental=inputs.nwc_pct_of_incremental_revenue,
             tax_rate=inputs.tax_rate,
             year_index=year_index,
         )
@@ -129,8 +152,17 @@ def _run_dcf(inputs: DcfInput) -> DcfResult:
         projections.append(proj)
         prior_revenue = proj.revenue
 
-    final_fcff = projections[-1].fcff
-    terminal_value_undiscounted = compute_terminal_value(final_fcff, inputs.wacc, inputs.terminal_growth_rate)
+    final = projections[-1]
+    g = inputs.terminal_growth_rate
+    final_fcff = final.fcff
+    if inputs.nwc_pct_of_incremental_revenue is not None:
+        # Steady state: from year n+1 revenue grows at g, so NWC investment is rate x Rev_n x g.
+        # compute_terminal_value multiplies by (1+g), so hand it the equivalent year-n figure:
+        # FCFF_(n+1) = (FCFF_n + NWC_n)(1+g) - rate x Rev_n x g.
+        pre_nwc_fcff = final.fcff + final.nwc_change
+        final_fcff = pre_nwc_fcff - inputs.nwc_pct_of_incremental_revenue * final.revenue * g / (1 + g)
+    terminal_value_undiscounted = compute_terminal_value(final_fcff, inputs.wacc, g)
+    terminal_fcff = final_fcff * (1 + g)
     final_discount_factor = projections[-1].discount_factor
     terminal_value_discounted = terminal_value_undiscounted * final_discount_factor
 
@@ -172,7 +204,7 @@ def _run_dcf(inputs: DcfInput) -> DcfResult:
         )
         exit_price = exit_equity / inputs.diluted_shares_outstanding
 
-    return DcfResult(
+    result = DcfResult(
         inputs=inputs,
         projections=projections,
         terminal_value_undiscounted=terminal_value_undiscounted,
@@ -186,4 +218,93 @@ def _run_dcf(inputs: DcfInput) -> DcfResult:
         exit_multiple_enterprise_value=exit_ev,
         exit_multiple_equity_value=exit_equity,
         exit_multiple_implied_price_per_share=exit_price,
+        terminal_fcff=terminal_fcff,
+        terminal_value_share_of_ev=(terminal_value_discounted / enterprise_value) if enterprise_value > 0 else None,
     )
+    result.warnings = dcf_warnings(inputs, result)
+    return result
+
+
+def _pct(x: float) -> str:
+    return f"{x * 100:.1f}%"
+
+
+def dcf_warnings(inputs: DcfInput, result: DcfResult) -> list[ModelWarning]:
+    """Non-fatal observations about a computed DCF. Pure function of the inputs and result."""
+    out: list[ModelWarning] = []
+    g, wacc = inputs.terminal_growth_rate, inputs.wacc
+
+    if result.terminal_fcff is not None and result.terminal_fcff < 0:
+        out.append(
+            ModelWarning(
+                code="NEGATIVE_TERMINAL_FCFF",
+                message=(
+                    f"The terminal-year free cash flow (FCFF_n+1 = {result.terminal_fcff:,.0f}) is negative, so "
+                    "the Gordon Growth terminal value is negative and subtracts value. Check the final-year "
+                    "margins, CapEx and working-capital assumptions."
+                ),
+            )
+        )
+
+    share = result.terminal_value_share_of_ev
+    if share is not None and share > TERMINAL_VALUE_SHARE_WARN:
+        out.append(
+            ModelWarning(
+                code="TERMINAL_VALUE_SHARE_HIGH",
+                message=(
+                    f"The discounted terminal value is {_pct(share)} of enterprise value (warning above "
+                    f"{_pct(TERMINAL_VALUE_SHARE_WARN)}): the valuation rests almost entirely on the "
+                    "perpetuity assumptions rather than the explicit forecast."
+                ),
+            )
+        )
+    exit_ev = result.exit_multiple_enterprise_value
+    if exit_ev is not None and exit_ev > 0 and result.exit_multiple_terminal_value_discounted is not None:
+        exit_share = result.exit_multiple_terminal_value_discounted / exit_ev
+        if exit_share > TERMINAL_VALUE_SHARE_WARN:
+            out.append(
+                ModelWarning(
+                    code="EXIT_MULTIPLE_TERMINAL_VALUE_SHARE_HIGH",
+                    message=(
+                        f"The discounted exit-multiple terminal value is {_pct(exit_share)} of the exit-multiple "
+                        f"enterprise value (warning above {_pct(TERMINAL_VALUE_SHARE_WARN)})."
+                    ),
+                )
+            )
+
+    if inputs.risk_free_rate is not None and g > inputs.risk_free_rate:
+        out.append(
+            ModelWarning(
+                code="TERMINAL_GROWTH_ABOVE_RISK_FREE",
+                message=(
+                    f"Terminal growth ({_pct(g)}) exceeds the risk-free rate ({_pct(inputs.risk_free_rate)}). A "
+                    "company growing faster than the risk-free rate forever would eventually outgrow the economy."
+                ),
+            )
+        )
+    if wacc < LOW_WACC_WARN:
+        out.append(
+            ModelWarning(
+                code="LOW_WACC",
+                message=f"WACC ({_pct(wacc)}) is below {_pct(LOW_WACC_WARN)}, which is unusually low and inflates present values.",
+            )
+        )
+    spread = wacc - g
+    if 0 < spread < THIN_SPREAD_WARN:
+        out.append(
+            ModelWarning(
+                code="THIN_WACC_SPREAD",
+                message=(
+                    f"WACC minus terminal growth is only {_pct(spread)} (warning below {_pct(THIN_SPREAD_WARN)}); "
+                    "the terminal value is extremely sensitive to small changes in either."
+                ),
+            )
+        )
+    if result.equity_value < 0:
+        out.append(
+            ModelWarning(
+                code="NEGATIVE_EQUITY_VALUE",
+                message=f"Equity value is negative ({result.equity_value:,.0f}); debt and other claims exceed the enterprise value.",
+            )
+        )
+    return out

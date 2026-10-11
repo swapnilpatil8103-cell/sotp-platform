@@ -261,6 +261,29 @@ export function ErrorState({
   );
 }
 
+/**
+ * Non-fatal validation warnings from a valuation result. Renders nothing when
+ * there are none. They flag assumptions to look at; the figures are unchanged.
+ */
+export function WarningList({ warnings }: { warnings?: { code: string; message: string }[] | null }) {
+  if (!warnings || warnings.length === 0) return null;
+  return (
+    <div role="status" className="rounded-[10px] border border-[#D97706]/30 bg-[#D97706]/[0.06] p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[#B45309]">
+        {warnings.length === 1 ? "1 warning" : `${warnings.length} warnings`}
+      </p>
+      <ul className="mt-2 space-y-1.5">
+        {warnings.map((w, i) => (
+          <li key={`${w.code}-${i}`} className="text-xs text-[#111827]/80">
+            <span className="mr-2 rounded-[4px] bg-[#D97706]/15 px-1.5 py-0.5 font-mono text-[10px] text-[#B45309]">{w.code}</span>
+            {w.message}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function EmptyState({ message }: { message: string }) {
   return (
     <div className="rounded-[10px] border border-dashed border-[#E5E7EB] p-8 text-center text-sm text-[#111827]/50">

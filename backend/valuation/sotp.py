@@ -32,7 +32,9 @@ undefined). Worked example: implied 11, market 10 -> upside +10.0%, discount
 
 from __future__ import annotations
 
-from backend.schemas.valuation import SotpInput, SotpResult
+from backend.schemas.valuation import ModelWarning, SotpInput, SotpResult
+
+LARGE_GAP_TO_MARKET_PCT = 50.0  # |upside/downside| above this draws a warning
 
 
 def run_sotp(inputs: SotpInput) -> SotpResult:
@@ -63,7 +65,7 @@ def run_sotp(inputs: SotpInput) -> SotpResult:
         if implied_price_per_share > 0:
             conglomerate_discount_pct = gap / implied_price_per_share * 100
 
-    return SotpResult(
+    result = SotpResult(
         inputs=inputs,
         segment_attributed_evs=segment_attributed_evs,
         sum_of_segment_evs=sum_of_segment_evs,
@@ -76,3 +78,53 @@ def run_sotp(inputs: SotpInput) -> SotpResult:
         conglomerate_discount_pct=conglomerate_discount_pct,
         upside_downside_pct=upside_downside_pct,
     )
+    result.warnings = sotp_warnings(inputs, result)
+    return result
+
+
+def sotp_warnings(inputs: SotpInput, result: SotpResult) -> list[ModelWarning]:
+    """Non-fatal observations about a computed SOTP. They never change a figure."""
+    out: list[ModelWarning] = []
+
+    if result.equity_value < 0:
+        out.append(
+            ModelWarning(
+                code="NEGATIVE_EQUITY_VALUE",
+                message=f"Equity value is negative ({result.equity_value:,.0f}); deductions exceed the sum of the parts plus non-operating assets.",
+            )
+        )
+
+    negative = [name for name, ev in result.segment_attributed_evs.items() if ev < 0]
+    if negative:
+        out.append(
+            ModelWarning(
+                code="NEGATIVE_SEGMENT_EV",
+                message=f"Segment(s) with a negative attributed enterprise value: {', '.join(negative)}. Check the upstream segment valuation.",
+            )
+        )
+
+    if inputs.corporate_overhead_treatment == "direct_deduction" and inputs.corporate_overhead_annual > 0:
+        out.append(
+            ModelWarning(
+                code="OVERHEAD_NOT_DEDUCTED",
+                message=(
+                    f"Annual corporate overhead of {inputs.corporate_overhead_annual:,.0f} is entered but the "
+                    f"direct_deduction treatment does not deduct it; capitalising it would reduce equity value by "
+                    f"{result.capitalized_overhead_deduction:,.0f} (see equity_value_capitalized_overhead)."
+                ),
+            )
+        )
+
+    gap = result.upside_downside_pct
+    if gap is not None and abs(gap) > LARGE_GAP_TO_MARKET_PCT:
+        direction = "above" if gap > 0 else "below"
+        out.append(
+            ModelWarning(
+                code="LARGE_GAP_TO_MARKET",
+                message=(
+                    f"The SOTP-implied price is {abs(gap):.1f}% {direction} the current market price "
+                    f"(warning beyond {LARGE_GAP_TO_MARKET_PCT:.0f}%); re-check the segment values and deductions."
+                ),
+            )
+        )
+    return out

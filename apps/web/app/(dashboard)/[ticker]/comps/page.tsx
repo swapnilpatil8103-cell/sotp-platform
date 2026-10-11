@@ -3,7 +3,7 @@
 import { useState, use } from "react";
 import { computeComps } from "@/lib/api";
 import type { CompPeer, CompsInput, CompsResult, MultipleMetric } from "@/lib/types";
-import { Card, ErrorState, MetricCard, SectionHeading, Table } from "@/components/ui";
+import { Card, ErrorState, MetricCard, SectionHeading, Table, WarningList } from "@/components/ui";
 
 const DEFAULT_PEERS: CompPeer[] = [
   { name: "Peer A", revenue: 80_000_000_000, ebitda: 22_000_000_000, ebit: 18_000_000_000, net_income: 14_000_000_000, market_cap: 300_000_000_000, debt: 20_000_000_000, cash: 15_000_000_000 },
@@ -24,6 +24,8 @@ export default function CompsPage({ params }: { params: Promise<{ ticker: string
   const [shares, setShares] = useState(1_000_000_000);
   const [metric, setMetric] = useState<MultipleMetric>("ev_to_ebitda");
   const [multipleValue, setMultipleValue] = useState(12);
+  const [trimOutliers, setTrimOutliers] = useState(false);
+  const [iqrMultiplier, setIqrMultiplier] = useState(1.5);
 
   const [result, setResult] = useState<CompsResult | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -49,6 +51,8 @@ export default function CompsPage({ params }: { params: Promise<{ ticker: string
       target_diluted_shares_outstanding: shares,
       chosen_multiple_metric: metric,
       chosen_multiple_value: multipleValue,
+      trim_outliers: trimOutliers,
+      iqr_multiplier: iqrMultiplier,
     };
     try {
       setResult(await computeComps(payload));
@@ -114,6 +118,11 @@ export default function CompsPage({ params }: { params: Promise<{ ticker: string
             </select>
           </div>
           <Num label="Multiple value" value={multipleValue} onChange={setMultipleValue} step="0.1" />
+          <label className="flex items-center gap-2 text-xs font-medium text-[#111827]/70 sm:col-span-2">
+            <input type="checkbox" checked={trimOutliers} onChange={(e) => setTrimOutliers(e.target.checked)} />
+            Trim outliers from the statistics (IQR rule; never changes the chosen multiple)
+          </label>
+          {trimOutliers && <Num label="IQR multiplier (k)" value={iqrMultiplier} onChange={setIqrMultiplier} step="0.1" />}
         </div>
       </Card>
 
@@ -131,6 +140,8 @@ export default function CompsPage({ params }: { params: Promise<{ ticker: string
             <MetricCard label="Implied Price/Share" value={`$${result.implied_price_per_share.toFixed(2)}`} />
           </div>
 
+          <WarningList warnings={result.warnings} />
+
           <Card title="Peer Multiples">
             <Table headers={["Peer", "EV/Rev", "EV/EBITDA", "EV/EBIT", "P/E", "P/B"]}>
               {result.peer_multiples.map((pm) => (
@@ -147,7 +158,7 @@ export default function CompsPage({ params }: { params: Promise<{ ticker: string
           </Card>
 
           <Card title="Percentile Statistics">
-            <Table headers={["Metric", "Min", "P25", "Median", "P75", "Max"]}>
+            <Table headers={["Metric", "Min", "P25", "Median", "P75", "Max", "Peers used", "Excluded"]}>
               {result.stats.map((s) => (
                 <tr key={s.metric} className="border-b border-[#E5E7EB] last:border-0">
                   <td className="px-4 py-2.5 font-medium">{s.metric}</td>
@@ -156,10 +167,33 @@ export default function CompsPage({ params }: { params: Promise<{ ticker: string
                   <td className="px-4 py-2.5 tabular-nums">{s.median.toFixed(2)}</td>
                   <td className="px-4 py-2.5 tabular-nums">{s.p75.toFixed(2)}</td>
                   <td className="px-4 py-2.5 tabular-nums">{s.max.toFixed(2)}</td>
+                  <td className="px-4 py-2.5 tabular-nums">{s.n_peers_used ?? "—"}</td>
+                  <td className="px-4 py-2.5 tabular-nums">
+                    {(s.n_not_meaningful ?? 0) + (s.n_outliers_excluded ?? 0)}
+                    {(s.n_outliers_excluded ?? 0) > 0 ? ` (${s.n_outliers_excluded} outlier${s.n_outliers_excluded === 1 ? "" : "s"})` : ""}
+                  </td>
                 </tr>
               ))}
             </Table>
           </Card>
+
+          {(result.exclusions?.length ?? 0) > 0 && (
+            <Card
+              title="Peers left out of the statistics"
+              subtitle={`Every exclusion is listed. ${result.excluded_outlier_peer_count ?? 0} peer(s) trimmed as outliers.`}
+            >
+              <Table headers={["Peer", "Multiple", "Reason", "Detail"]}>
+                {result.exclusions!.map((e, i) => (
+                  <tr key={`${e.peer}-${e.metric}-${i}`} className="border-b border-[#E5E7EB] last:border-0">
+                    <td className="px-4 py-2.5 font-medium">{e.peer}</td>
+                    <td className="px-4 py-2.5">{e.metric}</td>
+                    <td className="px-4 py-2.5">{e.reason.replace(/_/g, " ")}</td>
+                    <td className="px-4 py-2.5 text-xs text-[#111827]/70">{e.detail}</td>
+                  </tr>
+                ))}
+              </Table>
+            </Card>
+          )}
         </>
       )}
     </div>

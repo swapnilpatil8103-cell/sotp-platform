@@ -226,7 +226,12 @@ export interface DcfInput {
   tax_rate: number;
   da_pct_of_revenue: number[];
   capex_pct_of_revenue: number[];
-  nwc_change_pct_of_revenue: number[];
+  /** Per-year NWC change as % of revenue. Supply exactly one of this and nwc_pct_of_incremental_revenue. */
+  nwc_change_pct_of_revenue?: number[] | null;
+  /** NWC investment as a fraction of the year-over-year increase in revenue (single rate). */
+  nwc_pct_of_incremental_revenue?: number | null;
+  /** Only used to raise a TERMINAL_GROWTH_ABOVE_RISK_FREE warning; never enters the arithmetic. */
+  risk_free_rate?: number | null;
   wacc: number;
   terminal_growth_rate: number;
   total_debt: number;
@@ -237,6 +242,12 @@ export interface DcfInput {
   exit_multiple?: number | null;
   /** Discount FCFF at t-0.5 (and Gordon TV at N-0.5). Default false. */
   mid_year_convention?: boolean;
+}
+
+/** A non-fatal observation about a result; the numbers are still computed. */
+export interface ModelWarning {
+  code: string;
+  message: string;
 }
 
 export interface DcfYearProjection {
@@ -266,6 +277,9 @@ export interface DcfResult {
   exit_multiple_enterprise_value?: number | null;
   exit_multiple_equity_value?: number | null;
   exit_multiple_implied_price_per_share?: number | null;
+  terminal_fcff?: number | null;
+  terminal_value_share_of_ev?: number | null;
+  warnings?: ModelWarning[];
 }
 
 // --- valuation: comps -----------------------------------------------------
@@ -305,6 +319,22 @@ export interface MultipleStats {
   median: number;
   p75: number;
   max: number;
+  n_peers_used?: number | null;
+  n_not_meaningful?: number | null;
+  n_outliers_excluded?: number | null;
+}
+
+export type ExclusionReason = "not_meaningful" | "iqr_outlier_low" | "iqr_outlier_high";
+
+/** One peer left out of one multiple's statistics, and why. */
+export interface PeerExclusion {
+  peer: string;
+  metric: MultipleMetric;
+  reason: ExclusionReason;
+  value?: number | null;
+  lower_bound?: number | null;
+  upper_bound?: number | null;
+  detail: string;
 }
 
 export interface CompsInput {
@@ -320,6 +350,9 @@ export interface CompsInput {
   target_diluted_shares_outstanding: number;
   chosen_multiple_metric: MultipleMetric;
   chosen_multiple_value: number;
+  /** Trim IQR outliers from each multiple's statistics (never changes chosen_multiple_value). */
+  trim_outliers?: boolean;
+  iqr_multiplier?: number;
 }
 
 export interface CompsResult {
@@ -329,6 +362,9 @@ export interface CompsResult {
   implied_enterprise_value?: number | null;
   implied_equity_value: number;
   implied_price_per_share: number;
+  exclusions?: PeerExclusion[];
+  excluded_outlier_peer_count?: number;
+  warnings?: ModelWarning[];
 }
 
 // --- valuation: SOTP -----------------------------------------------------
@@ -367,6 +403,7 @@ export interface SotpResult {
   /** (implied - market) / implied * 100. Positive = market below SOTP (discount); negative = premium. */
   conglomerate_discount_pct?: number | null;
   upside_downside_pct?: number | null;
+  warnings?: ModelWarning[];
 }
 
 // --- sensitivity -----------------------------------------------------

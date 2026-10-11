@@ -3,7 +3,7 @@
 import { useState, use } from "react";
 import { computeDcf, computePeerInformedBeta, getSuggestedRiskFreeRate } from "@/lib/api";
 import type { BetaAnalysisResult, DcfInput, DcfResult, PeerBetaInputRow } from "@/lib/types";
-import { AIBadge, Card, ErrorState, MetricCard, SectionHeading, Table } from "@/components/ui";
+import { AIBadge, Card, ErrorState, MetricCard, SectionHeading, Table, WarningList } from "@/components/ui";
 import { DcfProjectionChart } from "@/components/charts";
 
 const N_YEARS = 5;
@@ -21,6 +21,8 @@ export default function DcfPage({ params }: { params: Promise<{ ticker: string }
   const [daPct, setDaPct] = useState(0.04);
   const [capexPct, setCapexPct] = useState(0.05);
   const [nwcPct, setNwcPct] = useState(0.01);
+  const [nwcMode, setNwcMode] = useState<"revenue" | "incremental">("revenue");
+  const [nwcIncremental, setNwcIncremental] = useState(0.15);
   const [wacc, setWacc] = useState(0.09);
   const [terminalGrowth, setTerminalGrowth] = useState(0.025);
   const [totalDebt, setTotalDebt] = useState(5_000_000_000);
@@ -102,7 +104,10 @@ export default function DcfPage({ params }: { params: Promise<{ ticker: string }
       tax_rate: taxRate,
       da_pct_of_revenue: repeat(daPct),
       capex_pct_of_revenue: repeat(capexPct),
-      nwc_change_pct_of_revenue: repeat(nwcPct),
+      ...(nwcMode === "incremental"
+        ? { nwc_pct_of_incremental_revenue: nwcIncremental }
+        : { nwc_change_pct_of_revenue: repeat(nwcPct) }),
+      risk_free_rate: riskFreeRate,
       wacc,
       terminal_growth_rate: terminalGrowth,
       total_debt: totalDebt,
@@ -136,7 +141,22 @@ export default function DcfPage({ params }: { params: Promise<{ ticker: string }
           <Num label="Tax rate" value={taxRate} onChange={setTaxRate} step="0.01" />
           <Num label="D&A % of revenue" value={daPct} onChange={setDaPct} step="0.01" />
           <Num label="CapEx % of revenue" value={capexPct} onChange={setCapexPct} step="0.01" />
-          <Num label="NWC change % of revenue" value={nwcPct} onChange={setNwcPct} step="0.01" />
+          <div>
+            <label className="mb-1 block text-xs font-medium text-[#111827]/60">NWC method</label>
+            <select
+              value={nwcMode}
+              onChange={(e) => setNwcMode(e.target.value as "revenue" | "incremental")}
+              className="w-full rounded-[8px] border border-[#E5E7EB] px-3 py-2 text-sm"
+            >
+              <option value="revenue">% of revenue (per year)</option>
+              <option value="incremental">% of incremental revenue</option>
+            </select>
+          </div>
+          {nwcMode === "incremental" ? (
+            <Num label="NWC % of incremental revenue" value={nwcIncremental} onChange={setNwcIncremental} step="0.01" />
+          ) : (
+            <Num label="NWC change % of revenue" value={nwcPct} onChange={setNwcPct} step="0.01" />
+          )}
           <Num label="WACC" value={wacc} onChange={setWacc} step="0.005" />
           <Num label="Terminal growth rate" value={terminalGrowth} onChange={setTerminalGrowth} step="0.005" />
           <Num label="Total debt (gross, not net of cash)" value={totalDebt} onChange={setTotalDebt} />
@@ -271,6 +291,8 @@ export default function DcfPage({ params }: { params: Promise<{ ticker: string }
             <MetricCard label="Implied Price/Share" value={`$${result.implied_price_per_share.toFixed(2)}`} />
             <MetricCard label="Terminal Value (PV)" value={fmt(result.terminal_value_discounted)} />
           </div>
+
+          <WarningList warnings={result.warnings} />
 
           {result.exit_multiple_enterprise_value != null && (
             <Card
