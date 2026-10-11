@@ -69,6 +69,11 @@ finish() {
       echo; echo '```'; [ -f "$TMP/images.txt" ] && cat "$TMP/images.txt"; echo '```'
     } >> "$GITHUB_STEP_SUMMARY"
   fi
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    # One multi-line annotation with every check, so the full evidence is readable without opening the log.
+    report="$(printf '%s%%0A' "${REPORT[@]}")"
+    echo "::notice title=smoke report ($PASSED passed, $FAILED failed)::$(clean "$report" 6000 | sed 's/%250A/%0A/g')"
+  fi
   if [ "$FAILED" -gt 0 ] && [ -f "$TMP/logs.txt" ]; then
     annotate "container logs (tail)" "$(tail -c 700 "$TMP/logs.txt")"
   fi
@@ -181,7 +186,8 @@ step "5. exposure, users, secrets, size"
 bport="$(dc port backend 8000 2>/dev/null)"
 [[ "$bport" == 127.0.0.1:* ]] && ok "backend is published on loopback only" "$bport" || bad "backend is published on loopback only" "'$bport'"
 dport="$(dc port db 5432 2>/dev/null)"
-[ -z "$dport" ] && ok "database port is not published" "no host binding" || bad "database port is not published" "$dport"
+# `docker compose port` prints nothing or ":0" when a port is not published.
+if [ -z "$dport" ] || [ "$dport" = ":0" ]; then ok "database port is not published" "no host binding (compose reports '${dport:-}')"; else bad "database port is not published" "$dport"; fi
 wport="$(dc port web 3000 2>/dev/null)"
 [ -n "$wport" ] && ok "web is published (intended)" "$wport" || bad "web is published (intended)" "no binding"
 HOSTIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
