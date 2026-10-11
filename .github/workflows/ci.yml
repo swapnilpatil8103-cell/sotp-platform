@@ -31,7 +31,11 @@ jobs:
       # The weekly "Dependency drift" workflow covers newer releases.
       - run: pip install -r backend/requirements.txt -c backend/constraints.txt
       # Integration tests hit the real SEC EDGAR API and are excluded here.
-      - run: pytest -m "not integration"
+      - run: pytest -m "not integration" -ra --tb=short --junitxml=pytest.xml
+      # Raw logs need a GitHub sign-in; annotations and the summary do not.
+      - name: Summarise failures
+        if: failure()
+        run: python .github/scripts/summarize_junit.py pytest.xml
 
   backend-postgres:
     name: Backend tests (PostgreSQL)
@@ -65,7 +69,11 @@ jobs:
             backend/requirements.txt
             backend/constraints.txt
       - run: pip install -r backend/requirements.txt -c backend/constraints.txt
-      - run: pytest -m "not integration"
+      - run: pytest -m "not integration" -ra --tb=short --junitxml=pytest.xml
+      # Raw logs need a GitHub sign-in; annotations and the summary do not.
+      - name: Summarise failures
+        if: failure()
+        run: python .github/scripts/summarize_junit.py pytest.xml
 
   web:
     name: Web typecheck and build
