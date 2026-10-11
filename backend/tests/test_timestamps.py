@@ -184,8 +184,8 @@ def _pg_url_with_tz(zone: str) -> str:
 
 @needs_postgres
 def test_postgres_instants_survive_a_non_utc_session_timezone():
-    """00:00 UTC written and read back under an Asia/Calcutta session is still 00:00 UTC."""
-    engine = create_engine(normalize_database_url(_pg_url_with_tz("Asia/Calcutta")))
+    """00:00 UTC written and read back under an Asia/Kolkata session is still 00:00 UTC."""
+    engine = create_engine(normalize_database_url(_pg_url_with_tz("Asia/Kolkata")))
     SQLModel.metadata.drop_all(engine)
     SQLModel.metadata.create_all(engine)
     moment = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -201,7 +201,7 @@ def test_postgres_instants_survive_a_non_utc_session_timezone():
 def test_postgres_migration_converts_legacy_shifted_values_to_the_right_instant(monkeypatch):
     """Rows written under the old naive columns on an IST server hold 05:30 for 00:00 UTC; after the
     migration they must read back as 00:00 UTC, and the downgrade must restore the stored wall time."""
-    url = _pg_url_with_tz("Asia/Calcutta")
+    url = _pg_url_with_tz("Asia/Kolkata")
     engine = create_engine(normalize_database_url(url))
     SQLModel.metadata.drop_all(engine)
     with engine.begin() as c:

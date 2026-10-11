@@ -6,7 +6,7 @@ The earlier migrations created these columns as plain ``timestamp without time
 zone``. PostgreSQL silently converts an aware value to the SESSION time zone before
 dropping the zone when it is stored in such a column, so on a server whose
 TimeZone is not UTC every value was shifted (e.g. 00:00 UTC stored as 05:30 on an
-``Asia/Calcutta`` server) and read back as that shifted wall time.
+``Asia/Kolkata`` server) and read back as that shifted wall time.
 
 Existing rows: they were written through that same conversion, so their wall-clock
 values are in the session time zone. ``ALTER COLUMN ... TYPE timestamptz`` without a

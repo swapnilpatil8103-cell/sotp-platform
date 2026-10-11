@@ -281,7 +281,7 @@ The code now writes timezone-aware UTC everywhere and `backend/db.py` pins bare
 **Timestamps on PostgreSQL.** Every timestamp column is `timestamptz` (migration
 `a7b8c9d0e1f2`). Before it, the columns were `timestamp without time zone`, and
 PostgreSQL stored an aware UTC value as the *session's* wall time: on a server whose
-TimeZone is not UTC (e.g. `Asia/Calcutta`) every stored time was shifted (00:00 UTC
+TimeZone is not UTC (e.g. `Asia/Kolkata`) every stored time was shifted (00:00 UTC
 became 05:30). The migration converts existing rows by interpreting them in the
 session time zone, which recovers the original instants when the server's TimeZone has
 not changed since they were written; on a UTC server it changes nothing.
