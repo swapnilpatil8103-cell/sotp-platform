@@ -296,20 +296,43 @@ docker compose up --build
 The backend container applies the Alembic migrations on start, then serves on
 port 8000; the web app is on port 3000 and reaches the backend through its own
 server (`API_BASE_URL=http://backend:8000`), so nothing secret is baked into the
-image. Create a login once the stack is up (prompts for the password):
+image. Create the first admin once the stack is up (prompts for the password; refused once an active admin exists):
 
 ```bash
-docker compose exec backend python scripts/create_user.py --email you@example.com
+docker compose exec backend python scripts/create_user.py --email you@example.com --bootstrap-admin
 ```
 
-**What has been verified.** The workflow has run on GitHub for every push to
-`main`; backend, web and audit all pass. Docker itself was not available when
-this was written, so the Dockerfiles and `docker-compose.yml` have **not been
-built or run**. Instead the same steps were run directly against a fresh
-Postgres 16 database with the compose environment (migrations from scratch,
-`/health`, `/login`, `create_user.py`, sign-in through the web proxy over plain
-http, loading a company), and they work; `API_BASE_URL` is read at runtime. The
-first real `docker compose up` is still the test of the image files.
+**What has been verified.** `bash scripts/smoke_test.sh` builds both images, starts the
+stack with freshly generated secrets, and checks it end to end; it is the
+`docker-smoke` job in CI. On a GitHub-hosted Ubuntu runner (Docker with Compose v2) all
+38 checks passed, including:
+
+- `docker compose build` and `up -d`; db, backend and web all report `healthy`
+  (healthchecks: `pg_isready`, `GET /health`, `GET /login`).
+- Alembic ran 8 upgrades inside the backend container with no errors in its log, and
+  the database is at the head revision.
+- `docker compose exec backend python scripts/create_user.py --bootstrap-admin`
+  created the first admin; a second run was refused.
+- Through `http://localhost:3000`: `/login` serves, signed-out pages redirect to it,
+  sign-in works, the session cookie is `HttpOnly; SameSite=Strict` with **no `Secure`
+  flag** (compose sets `SESSION_COOKIE_SECURE=false` for plain http), the login response
+  carries no token, `/AAPL` and `/AAPL/dcf` load, the company lookup (a real SEC call)
+  returns Apple Inc., a DCF runs (EV 2583.11 for the test inputs), sign-out clears the
+  cookie, and API calls afterwards get `401`.
+- Backend published on `127.0.0.1:8000` only and refused on the host's external address;
+  the database port is not published at all; web (port 3000) is reachable externally.
+- PID 1 runs as a non-root user in all three containers (db uid 999, backend and web
+  uid 1000); no secret appears in image layers or image environment; no `.env`, `.git` or
+  tests in the images.
+- Image sizes: backend 725 MB, web 248 MB. (The web image was 701 MB until the Docker
+  build switched to Next's `standalone` output, which copies only the files the server
+  needs; local `npm run build` is unchanged.)
+
+`SMOKE_SKIP_SEC=1` skips the one check that calls SEC EDGAR; `KEEP=1` leaves the stack
+running afterwards. **Not verified:** Docker Desktop on Windows or macOS, running it on a
+developer machine, the `Secure` cookie flag in a real browser over HTTPS (that needs a TLS
+proxy in front), data surviving a restart of the Postgres volume, and the AI providers
+(the smoke test runs with no AI keys).
 
 ### Frontend (Next.js)
 
@@ -394,6 +417,6 @@ All 10 phases complete as scoped. Backend: 838 unit/router tests (3 of them run 
 Frontend: `npm run build` succeeds cleanly under TypeScript `strict` mode.
 JWT authentication with an `analyst` role gate has since been added (item 39
 is PARTIAL: login, sessions and live user checks built; no password reset or SSO). CI and containers are in place (see "CI and containers" below; item 40 is
-PARTIAL: CI green on GitHub, Docker images never built, no CD) — see
+PARTIAL: CI green, Docker stack smoke-tested in CI, no CD) — see
 `docs/definition-of-done.md` for the itemized final status of every
 Definition-of-Done requirement, including what's PARTIAL or NOT DONE.
