@@ -49,6 +49,10 @@ class FinancialFact(SQLModel, table=True):
     xbrl_tag: Optional[str] = Field(default=None, max_length=256)
 
     data_status: DataStatus = Field(default=DataStatus.MISSING)
+    # Plain-language provenance for any value that is not a straight REPORTED lookup: which
+    # components a DERIVED total was summed from, which filings disagree for a CONFLICTING
+    # (restated) one, or why a total supersedes a subset tag. Null for an ordinary REPORTED fact.
+    status_note: Optional[str] = Field(default=None, max_length=1024)
 
     created_at: datetime = Field(default_factory=_utcnow, nullable=False)
     updated_at: datetime = Field(default_factory=_utcnow, nullable=False)

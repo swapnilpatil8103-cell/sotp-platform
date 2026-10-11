@@ -39,6 +39,7 @@ from backend.data.normalizer import (
     _parse_date,
     _pick_fact_for_period,
     _true_fiscal_year,
+    build_fact,
 )
 from backend.models.enums import DataStatus
 from backend.models.financial_fact import FinancialFact
@@ -58,58 +59,17 @@ def normalize_company_facts_multi_year(
 ) -> list[FinancialFact]:
     """Produce FinancialFact rows for every (concept, fiscal_year) pair requested.
 
-    Mirrors `normalizer.normalize_company_facts` exactly (same REPORTED/MISSING
-    logic, same provenance fields) but loops over multiple fiscal years so the
-    caller gets a real multi-year series instead of one point per call.
+    Each row comes from `normalizer.build_fact`, the same builder the single-year path
+    uses, so both paths apply identical rules (original-filing share counts, total over
+    subset revenue, DERIVED total debt, CONFLICTING restatements) and provenance fields.
     """
     concepts = concepts or CANONICAL_CONCEPTS
-    results: list[FinancialFact] = []
-
-    for concept in concepts:
-        match = resolve_concept(concept, company_facts)
-
-        for fiscal_year in fiscal_years:
-            if not match.matched or not match.facts:
-                results.append(
-                    _missing_fact(company_id, concept, fiscal_year, fiscal_period, unit="USD", xbrl_tag=None)
-                )
-                continue
-
-            fact_entry, is_conflicting = _pick_fact_for_period(match.facts, fiscal_year, fiscal_period)
-            if fact_entry is None:
-                results.append(
-                    _missing_fact(
-                        company_id, concept, fiscal_year, fiscal_period, unit=match.unit or "USD", xbrl_tag=match.tag
-                    )
-                )
-                continue
-
-            accession = fact_entry.get("accn")
-            source_url = None
-            if accession and cik10:
-                accession_nodash = accession.replace("-", "")
-                source_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik10)}/{accession_nodash}/"
-
-            results.append(
-                FinancialFact(
-                    company_id=company_id,
-                    concept=concept,
-                    value=fact_entry.get("val"),
-                    unit=match.unit or "USD",
-                    currency="USD",
-                    period=f"{fiscal_year}-{fiscal_period}",
-                    fiscal_year=fiscal_year,
-                    fiscal_period=fiscal_period,
-                    filing_date=_parse_date(fact_entry.get("filed")),
-                    source=SEC_SOURCE,
-                    source_url=source_url,
-                    accession_number=accession,
-                    xbrl_tag=fact_entry.get("_xbrl_tag", match.tag),
-                    data_status=DataStatus.CONFLICTING if is_conflicting else DataStatus.REPORTED,
-                )
-            )
-
-    return results
+    cache: dict = {}  # tag resolution is shared by every (concept, year) of this ingestion
+    return [
+        build_fact(company_id, concept, company_facts, fiscal_year, fiscal_period, cik10=cik10, cache=cache)
+        for concept in concepts
+        for fiscal_year in fiscal_years
+    ]
 
 
 def _missing_fact(company_id, concept, fiscal_year, fiscal_period, unit, xbrl_tag) -> FinancialFact:

@@ -89,6 +89,8 @@ export interface FinancialFactRead {
   accession_number?: string | null;
   xbrl_tag?: string | null;
   data_status: DataStatus;
+  /** Why a DERIVED or CONFLICTING (restated) value is what it is; null for a plain REPORTED fact. */
+  status_note?: string | null;
 }
 
 export interface CompanyFactsRead {
@@ -134,6 +136,7 @@ export interface SegmentFactRead {
   accession_number?: string | null;
   xbrl_tag?: string | null;
   data_status: DataStatus;
+  status_note?: string | null;
 }
 
 export interface MetricCoverageRead {
@@ -145,6 +148,8 @@ export interface MetricCoverageRead {
 
 export interface SegmentRead {
   name: string;
+  /** Set when this member is nested under another listed segment: do not add it to the parent. */
+  parent_segment?: string | null;
   facts: SegmentFactRead[];
   coverage: MetricCoverageRead[];
   overall_coverage_pct: number;

@@ -50,6 +50,9 @@ CONCEPT_TAG_CANDIDATES: dict[str, list[str]] = {
         "SalesRevenueNet",
         "SalesRevenueGoodsNet",
         "SalesRevenueServicesNet",
+        # Banks (e.g. JPM) tag total net revenue as Revenues AND RevenuesNetOfInterestExpense;
+        # keep it as a last-resort fallback for filers that only use the latter.
+        "RevenuesNetOfInterestExpense",
     ],
     "cost_of_revenue": [
         "CostOfRevenue",
@@ -112,9 +115,13 @@ CONCEPT_TAG_CANDIDATES: dict[str, list[str]] = {
         "DebtCurrent",
         "ShortTermBorrowings",
     ],
+    # NON-CURRENT long-term debt only. Do not add "LongTermDebt" here: that tag is the TOTAL
+    # including the current portion (e.g. GE FY2025: LongTermDebt 20,469M vs balance-sheet
+    # long-term borrowings 18,808M, which GE tags LongTermDebtAndCapitalLeaseObligations), so
+    # using it as a fallback double counts the current portion wherever the two are added.
     "long_term_debt": [
         "LongTermDebtNoncurrent",
-        "LongTermDebt",
+        "LongTermDebtAndCapitalLeaseObligations",
     ],
     "shares_outstanding": [
         "EntityCommonStockSharesOutstanding",
@@ -163,6 +170,33 @@ class ConceptMatch:
     facts: Optional[list[dict[str, Any]]] = None  # raw XBRL "units" entries for the matched tag
 
 
+# ---------------------------------------------------------------------------
+# Special handling that is not a plain "first matching tag" lookup. The normalizer
+# (backend/data/normalizer.py) applies these; they are listed here so the tag
+# vocabulary lives in one place.
+# ---------------------------------------------------------------------------
+
+# The "total revenue" tag. A filer that reports BOTH it and a contract-revenue tag for the same
+# period reports contract revenue as a SUBSET (Berkshire Hathaway FY2025: Revenues 371,444M =
+# contract revenue 247,244M + other revenue 124,200M), so the larger total supersedes it.
+REVENUE_TOTAL_TAG = "Revenues"
+REVENUE_CONTRACT_TAGS = (
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+)
+
+# total_debt is derived (DataStatus.DERIVED) from reported components when no single tag
+# reports it: current part (DebtCurrent, or the sum of whichever of the parts are reported)
+# plus the non-current part. Every part is a real reported fact; nothing is estimated.
+TOTAL_DEBT_CURRENT_TOTAL_TAG = "DebtCurrent"
+TOTAL_DEBT_CURRENT_PARTS = ("CommercialPaper", "ShortTermBorrowings", "LongTermDebtCurrent")
+TOTAL_DEBT_NONCURRENT_TAGS = ("LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations")
+
+# Cover-page (dei) share count, as of a date shortly AFTER the fiscal year end.
+SHARES_COVER_TAG = "EntityCommonStockSharesOutstanding"
+SHARES_BALANCE_SHEET_TAG = "CommonStockSharesOutstanding"
+
+
 def resolve_concept(concept: str, company_facts: dict[str, Any]) -> ConceptMatch:
     """Resolve a single canonical concept against a company's raw XBRL companyfacts JSON.
 
@@ -197,21 +231,32 @@ def resolve_concept(concept: str, company_facts: dict[str, Any]) -> ConceptMatch
     a simple "which tag matched" answer (e.g. logging) and don't care about
     the merge.
 
-    When the SAME period (same `start`+`end`+`fp`) is reported under two
-    different tags, we deduplicate: if the values agree, we keep only the
-    higher-priority tag's entry (not a real conflict, just tag overlap /
-    duplicate coverage). If the values genuinely differ, we keep both entries
-    (each still tagged `_tag_priority`) and mark them `_conflicting=True` so
-    the caller can surface `DataStatus.CONFLICTING` instead of silently
-    picking one -- no fabrication, no silent guessing.
+    Every candidate tag's entries are kept (none is discarded because another tag
+    reported the same period): two tags may legitimately disagree for one period
+    because one is a subset of the other (revenue from contracts with customers vs
+    total revenues; DebtCurrent vs LongTermDebtCurrent). Choosing among them, and
+    detecting restatements (one tag, one period, different values in different
+    filings -> DataStatus.CONFLICTING), is done in `normalizer.pick_fact`, where the
+    requested period is known.
+
+    EARLIER BUG (fixed): this function used to collapse entries that shared
+    (start, end, fp, accn) across tags, keeping only the highest-priority tag. That
+    silently discarded Berkshire Hathaway's total `Revenues` (371,444M) in favour of
+    the contract-revenue subset (247,244M) before any selection logic could see it.
     """
-    candidates = CONCEPT_TAG_CANDIDATES.get(concept, [])
+    return resolve_tags(concept, CONCEPT_TAG_CANDIDATES.get(concept, []), company_facts)
+
+
+def resolve_tags(concept: str, candidates: list[str] | tuple[str, ...], company_facts: dict[str, Any]) -> ConceptMatch:
+    """Resolve an explicit, ordered list of candidate tags (see ``resolve_concept``, which
+    passes the canonical concept's list). Used directly for the special cases above."""
     facts_by_taxonomy = company_facts.get("facts", {})
 
     primary_tag: Optional[str] = None
     primary_taxonomy: Optional[str] = None
     primary_unit: Optional[str] = None
-    merged: dict[tuple, dict[str, Any]] = {}  # period key -> chosen entry (lowest priority number wins on tie)
+    all_facts: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
 
     for priority, tag in enumerate(candidates):
         for taxonomy in TAXONOMIES:
@@ -232,41 +277,25 @@ def resolve_concept(concept: str, company_facts: dict[str, Any]) -> ConceptMatch
                 primary_tag, primary_taxonomy, primary_unit = tag, taxonomy, unit_key
 
             for entry in unit_facts:
-                key = (entry.get("start"), entry.get("end"), entry.get("fp"), entry.get("accn"))
+                # Only an exact repeat (same tag, period, filing AND value) is dropped. Different
+                # tags are all kept, with their own _xbrl_tag/_tag_priority: they can legitimately
+                # differ for the same period (a total vs a subset), and the selection step in
+                # normalizer.pick_fact needs to see both. Cross-FILING differences for one tag
+                # (restatements) are detected there too, where the chosen tag is known.
+                key = (tag, entry.get("start"), entry.get("end"), entry.get("fp"), entry.get("accn"), entry.get("val"))
+                if key in seen:
+                    continue
+                seen.add(key)
                 enriched = dict(entry)
                 enriched["_xbrl_tag"] = tag
                 enriched["_tag_priority"] = priority
-                existing = merged.get(key)
-                if existing is None:
-                    merged[key] = enriched
-                    continue
-                # Same (start, end, fp, accn) already merged from a different
-                # tag -- shouldn't normally happen (accn differs across
-                # filings) but keep the higher-priority one defensively.
-                if enriched["_tag_priority"] < existing["_tag_priority"]:
-                    merged[key] = enriched
+                all_facts.append(enriched)
 
             # Only try the first taxonomy that has data for this tag.
             break
 
     if primary_tag is None:
         return ConceptMatch(concept=concept, matched=False)
-
-    # Second pass: detect genuine value conflicts between different tags for
-    # the exact same reporting period (same start/end/fp, different accn --
-    # i.e. two different filings/tags both claim to report this period).
-    by_period: dict[tuple, list[dict[str, Any]]] = {}
-    for entry in merged.values():
-        period_key = (entry.get("start"), entry.get("end"), entry.get("fp"))
-        by_period.setdefault(period_key, []).append(entry)
-
-    all_facts: list[dict[str, Any]] = []
-    for period_key, entries in by_period.items():
-        distinct_vals = {e.get("val") for e in entries}
-        if len(distinct_vals) > 1:
-            for e in entries:
-                e["_conflicting"] = True
-        all_facts.extend(entries)
 
     return ConceptMatch(
         concept=concept,

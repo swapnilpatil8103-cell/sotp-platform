@@ -56,6 +56,39 @@ class XbrlFact:
     unit_ref: Optional[str]
 
 
+LINK_NS = "http://www.xbrl.org/2003/linkbase"
+XLINK_NS = "http://www.w3.org/1999/xlink"
+DOMAIN_MEMBER_ARCROLE_SUFFIX = "/domain-member"
+
+
+def parse_definition_hierarchy(definition_xml: bytes) -> dict[str, set[str]]:
+    """Parse a filing's definition linkbase into ``{child_local_name: {parent_local_name, ...}}``.
+
+    Only ``domain-member`` arcs are read (the relationship between a domain or member and
+    the members nested under it). Element names come from each ``link:loc``'s ``href``
+    fragment (``intc_ClientComputingGroupMember`` -> ``ClientComputingGroupMember``), which
+    is how the instance document's dimension members are named once the prefix is dropped.
+    """
+    try:
+        root = etree.fromstring(definition_xml)
+    except etree.XMLSyntaxError:
+        return {}
+    parents: dict[str, set[str]] = {}
+    xlink = "{%s}" % XLINK_NS
+    for link in root.iter("{%s}definitionLink" % LINK_NS):
+        names: dict[str, str] = {}
+        for loc in link.iter("{%s}loc" % LINK_NS):
+            fragment = (loc.get(xlink + "href") or "").rsplit("#", 1)[-1]
+            names[loc.get(xlink + "label") or ""] = fragment.split("_", 1)[-1] if "_" in fragment else fragment
+        for arc in link.iter("{%s}definitionArc" % LINK_NS):
+            if not (arc.get(xlink + "arcrole") or "").endswith(DOMAIN_MEMBER_ARCROLE_SUFFIX):
+                continue
+            parent, child = names.get(arc.get(xlink + "from") or ""), names.get(arc.get(xlink + "to") or "")
+            if parent and child:
+                parents.setdefault(child, set()).add(parent)
+    return parents
+
+
 def _parse_date(text: Optional[str]) -> Optional[date]:
     if not text:
         return None

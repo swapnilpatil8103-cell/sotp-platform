@@ -20,6 +20,7 @@ class SegmentFactRead(BaseModel):
     accession_number: Optional[str] = None
     xbrl_tag: Optional[str] = None
     data_status: str
+    status_note: Optional[str] = None
 
 
 class MetricCoverageRead(BaseModel):
@@ -31,6 +32,9 @@ class MetricCoverageRead(BaseModel):
 
 class SegmentRead(BaseModel):
     name: str
+    # Set when the filing nests this member under another listed segment (e.g. Intel's CCG and
+    # DCAI under Intel Products). Its amounts are already INCLUDED in the parent's: do not add them.
+    parent_segment: Optional[str] = None
     facts: list[SegmentFactRead]
     coverage: list[MetricCoverageRead]
     overall_coverage_pct: float

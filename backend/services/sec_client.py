@@ -53,7 +53,7 @@ from backend.data.ownership_xml import (
     parse_13f_information_table,
     parse_ownership_document,
 )
-from backend.data.xbrl_instance import XbrlContext, XbrlFact, parse_inline_xbrl
+from backend.data.xbrl_instance import XbrlContext, XbrlFact, parse_definition_hierarchy, parse_inline_xbrl
 from backend.services.cache import FileCache
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -443,6 +443,30 @@ class SECConnector:
         """
         document = self._fetch_document(source_url, cache_ttl_seconds=FILING_DOCUMENT_CACHE_TTL_SECONDS)
         return parse_inline_xbrl(document)
+
+    def get_filing_member_hierarchy(self, source_url: str) -> dict[str, set[str]]:
+        """Parent -> children relationships between XBRL domain members in a filing, from its
+        definition linkbase (``*_def.xml``), as ``{child_local_name: {parent_local_name, ...}}``.
+
+        A segment note often tags both a segment and its sub-lines (Intel Products and its
+        CCG / DCAI components) with the SAME segment axis; only this linkbase says which is
+        nested in which. Returns ``{}`` if the filing has no definition linkbase or it cannot
+        be read: the caller then simply has no hierarchy information.
+
+        ``source_url`` is the filing's primary document URL; the linkbase is found through the
+        filing folder's ``index.json``.
+        """
+        folder = source_url.rsplit("/", 1)[0]
+        try:
+            index = self._fetch_json(folder + "/index.json", cache_ttl_seconds=FILING_DOCUMENT_CACHE_TTL_SECONDS)
+            names = [item.get("name", "") for item in index.get("directory", {}).get("item", [])]
+            definition = next((n for n in names if n.endswith("_def.xml")), None)
+            if definition is None:
+                return {}
+            data = self._fetch_document(folder + "/" + definition, cache_ttl_seconds=FILING_DOCUMENT_CACHE_TTL_SECONDS)
+        except SECError:
+            return {}
+        return parse_definition_hierarchy(data)
 
     # --------------------------------------------------- Insider ownership
 

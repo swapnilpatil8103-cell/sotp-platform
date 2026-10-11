@@ -64,6 +64,7 @@ def upsert_financial_facts(session: Session, company_id: int, facts: Iterable[Fi
             existing.source_url = fact.source_url
             existing.accession_number = fact.accession_number
             existing.data_status = fact.data_status
+            existing.status_note = fact.status_note
             existing.updated_at = _utcnow()
             session.add(existing)
             persisted.append(existing)
@@ -143,6 +144,7 @@ def upsert_segment_financial_facts(
             existing.source_url = fact.source_url
             existing.accession_number = fact.accession_number
             existing.data_status = fact.data_status
+            existing.status_note = fact.status_note
             existing.updated_at = _utcnow()
             session.add(existing)
             persisted.append(existing)

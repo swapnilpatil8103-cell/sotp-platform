@@ -129,6 +129,7 @@ def get_company_segments(
     company = get_or_create_company(session, ticker=ticker, cik10=cik10)
 
     segments_facts_for_coverage = {}
+    parents = {s.name: s.parent_segment for s in result.segments}
     segment_reads: list[SegmentRead] = []
     for ext_segment in result.segments:
         db_segment = get_or_create_segment(session, company_id=company.id, name=ext_segment.name)
@@ -144,6 +145,7 @@ def get_company_segments(
         segment_reads.append(
             SegmentRead(
                 name=name,
+                parent_segment=parents.get(name),
                 facts=[
                     SegmentFactRead(
                         concept=f.concept,
@@ -158,6 +160,7 @@ def get_company_segments(
                         accession_number=f.accession_number,
                         xbrl_tag=f.xbrl_tag,
                         data_status=f.data_status.value,
+                        status_note=f.status_note,
                     )
                     for f in facts
                 ],

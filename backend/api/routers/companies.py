@@ -602,4 +602,5 @@ def _to_read(f) -> FinancialFactRead:
         accession_number=f.accession_number,
         xbrl_tag=f.xbrl_tag,
         data_status=f.data_status.value,
+        status_note=f.status_note,
     )

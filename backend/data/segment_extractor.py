@@ -25,6 +25,7 @@ from datetime import date
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
+from backend.data.concept_mapping import REVENUE_CONTRACT_TAGS
 from backend.data.xbrl_instance import XbrlContext, XbrlFact
 from backend.models.enums import DataStatus
 from backend.models.segment_financial_fact import SegmentFinancialFact
@@ -43,6 +44,8 @@ SEGMENT_CONCEPT_TAG_CANDIDATES: dict[str, list[str]] = {
         "RevenueFromContractWithCustomerIncludingAssessedTax",
         "Revenues",
         "SalesRevenueNet",
+        # Banks tag segment (and consolidated) total net revenue this way (JPM's segments).
+        "RevenuesNetOfInterestExpense",
     ],
     "operating_income": [
         "OperatingIncomeLoss",
@@ -116,10 +119,20 @@ def _humanize(local: str) -> str:
     return "".join(out).strip()
 
 
+# Total-revenue tags: when one of these is reported for a segment alongside a contract-revenue tag,
+# the contract figure is a subset (Berkshire's BNSF: Revenues 23,533M vs contract revenue 23,256M).
+REVENUE_TOTAL_TAGS = ("Revenues", "RevenuesNetOfInterestExpense")
+CONSOLIDATION_AXIS = "ConsolidationItemsAxis"
+OPERATING_SEGMENTS_MEMBER = "OperatingSegmentsMember"
+
+
 @dataclass
 class ExtractedSegment:
     name: str
     facts: list[SegmentFinancialFact] = field(default_factory=list)
+    # Name of the listed segment this member is nested under (from the filing's definition
+    # linkbase), whose amounts already include this member's. None for a top-level segment.
+    parent_segment: Optional[str] = None
 
 
 @dataclass
@@ -136,6 +149,16 @@ def _segment_contexts(contexts: dict[str, XbrlContext]) -> dict[str, list[str]]:
             if _local(axis) in SEGMENT_AXIS_LOCAL_NAMES:
                 name = _humanize(_local(member))
                 result.setdefault(name, []).append(ctx_id)
+    return result
+
+
+def _segment_member_locals(contexts: dict[str, XbrlContext]) -> dict[str, str]:
+    """Display name -> the member's local XBRL name (the key the definition linkbase uses)."""
+    result: dict[str, str] = {}
+    for ctx in contexts.values():
+        for axis, member in ctx.dimensions:
+            if _local(axis) in SEGMENT_AXIS_LOCAL_NAMES:
+                result[_humanize(_local(member))] = _local(member)
     return result
 
 
@@ -157,6 +180,105 @@ def _context_matches_period(ctx: XbrlContext, fiscal_year: int, fiscal_period: s
     return bool(ctx.end) and ctx.end.year == fiscal_year and (_is_quarter_duration(ctx.start, ctx.end) or ctx.instant is not None)
 
 
+@dataclass
+class _Hit:
+    priority: int  # position of the tag in the candidate list (lower = preferred)
+    rank: int  # 0 = from the reportable-segment table (ConsolidationItemsAxis=OperatingSegments), 1 = other
+    order: int  # document order
+    tag: str
+    value: float
+
+
+def _is_reportable_table_context(ctx: XbrlContext) -> bool:
+    return any(_local(a) == CONSOLIDATION_AXIS and _local(m) == OPERATING_SEGMENTS_MEMBER for a, m in ctx.dimensions)
+
+
+def _fmt_amount(value: float) -> str:
+    return f"{value:,.0f}"
+
+
+def _pick_segment_value(
+    concept: str,
+    candidates: list[str],
+    pure_ctx_ids: list[str],
+    contexts: dict[str, XbrlContext],
+    facts_index: dict[tuple[str, str], list[XbrlFact]],
+) -> Optional[tuple[_Hit, DataStatus, Optional[str]]]:
+    """Choose a segment's value for one concept among every matching tag and context.
+
+    Preference: the highest-priority tag, then a value from the reportable-segment table, then
+    document order. For revenue a larger total-revenue tag supersedes a contract-revenue
+    subset. If the chosen tag has different values in different disclosures for the same
+    segment and period, the result is CONFLICTING and the note says which disagree.
+    """
+    hits: list[_Hit] = []
+    order = 0
+    for priority, tag in enumerate(candidates):
+        for cid in pure_ctx_ids:
+            rank = 0 if _is_reportable_table_context(contexts[cid]) else 1
+            for f in facts_index.get((tag, cid), []):
+                hits.append(_Hit(priority, rank, order, tag, f.value))
+                order += 1
+    if not hits:
+        return None
+
+    def key(h: _Hit) -> tuple[int, int, int]:
+        return (h.priority, h.rank, h.order)
+
+    hits.sort(key=key)
+    chosen = hits[0]
+    note: Optional[str] = None
+    if concept == "revenue" and chosen.tag in REVENUE_CONTRACT_TAGS:
+        totals = [h for h in hits if h.tag in REVENUE_TOTAL_TAGS and h.value > chosen.value]
+        if totals:
+            total = min(totals, key=key)
+            note = (
+                f"Total revenue ({total.tag} {_fmt_amount(total.value)}) used: the contract-revenue tag "
+                f"({chosen.tag} {_fmt_amount(chosen.value)}) for this segment is a subset of it."
+            )
+            chosen = total
+
+    same_tag = [h for h in hits if h.tag == chosen.tag]
+    if len({h.value for h in same_tag}) > 1:
+        seen: dict[tuple[float, int], None] = {}
+        for h in same_tag:
+            seen[(h.value, h.rank)] = None
+        listing = "; ".join(
+            f"{_fmt_amount(v)} ({'reportable-segment table' if r == 0 else 'other segment disclosure'})" for v, r in seen
+        )
+        conflict = f"{chosen.tag} differs between disclosures for this segment: {listing}. The reportable-segment table value is used where present."
+        return chosen, DataStatus.CONFLICTING, (f"{note} {conflict}" if note else conflict)
+    return chosen, DataStatus.REPORTED, note
+
+
+def _reconciling_items(
+    contexts: dict[str, XbrlContext],
+    facts_index: dict[tuple[str, str], list[XbrlFact]],
+    fiscal_year: int,
+    fiscal_period: str,
+) -> list[str]:
+    """Amounts filed against ConsolidationItemsAxis members that are not operating segments
+    (intersegment eliminations, corporate/non-segment items). They are not segments, but without
+    them the segments' amounts do not add up to the consolidated figures."""
+    out: dict[str, dict[str, float]] = {}
+    for cid, ctx in contexts.items():
+        if len(ctx.dimensions) != 1 or _local(ctx.dimensions[0][0]) != CONSOLIDATION_AXIS:
+            continue
+        member = _local(ctx.dimensions[0][1])
+        if member == OPERATING_SEGMENTS_MEMBER or not _context_matches_period(ctx, fiscal_year, fiscal_period):
+            continue
+        for concept in ("revenue", "operating_income"):
+            for tag in SEGMENT_CONCEPT_TAG_CANDIDATES[concept]:
+                hit = facts_index.get((tag, cid))
+                if hit:
+                    out.setdefault(_humanize(member), {})[concept] = hit[0].value
+                    break
+    return [
+        f"{name}: " + ", ".join(f"{concept} {_fmt_amount(v)}" for concept, v in sorted(vals.items()))
+        for name, vals in sorted(out.items())
+    ]
+
+
 def extract_segments_from_instance(
     contexts: dict[str, XbrlContext],
     facts: list[XbrlFact],
@@ -165,7 +287,16 @@ def extract_segments_from_instance(
     cik10: Optional[str] = None,
     accession_number: Optional[str] = None,
     source_url: Optional[str] = None,
+    member_parents: Optional[dict[str, set[str]]] = None,
 ) -> SegmentExtractionResult:
+    """Reconstruct per-segment facts from a filing's inline-XBRL contexts and facts.
+
+    ``member_parents`` (child member local name -> parent member local names, from the filing's
+    definition linkbase) lets the result flag a sub-segment with ``parent_segment`` so callers do
+    not add it to its parent. Members with no value for the period (recast or discontinued
+    segments still present for prior periods) are left out of ``segments`` and named in
+    ``note``; reconciling items (eliminations, corporate) are summarised there too.
+    """
     seg_ctx_map = _segment_contexts(contexts)
 
     if not seg_ctx_map:
@@ -202,24 +333,14 @@ def extract_segments_from_instance(
         ext = ExtractedSegment(name=segment_name)
         for concept in SEGMENT_CONCEPTS:
             candidates = SEGMENT_CONCEPT_TAG_CANDIDATES[concept]
-            picked_fact: Optional[XbrlFact] = None
-            picked_tag: Optional[str] = None
-            for tag in candidates:
-                for cid in pure_ctx_ids:
-                    hits = facts_index.get((tag, cid))
-                    if hits:
-                        picked_fact = hits[0]
-                        picked_tag = tag
-                        break
-                if picked_fact is not None:
-                    break
+            picked = _pick_segment_value(concept, candidates, pure_ctx_ids, contexts, facts_index)
             # Deliberately no fallback to multi-dimensional (e.g.
             # product-level) facts here: if a filer never discloses a pure
             # segment-level total for this concept, summing or guessing from
             # sub-line facts would risk double-counting or omitting lines we
             # can't verify are exhaustive. Report MISSING instead.
 
-            if picked_fact is None:
+            if picked is None:
                 ext.facts.append(
                     SegmentFinancialFact(
                         segment_id=0,
@@ -240,11 +361,12 @@ def extract_segments_from_instance(
                 )
                 continue
 
+            hit, status, note = picked
             ext.facts.append(
                 SegmentFinancialFact(
                     segment_id=0,
                     concept=concept,
-                    value=picked_fact.value,
+                    value=hit.value,
                     unit="USD",
                     currency="USD",
                     period=f"{fiscal_year}-{fiscal_period}",
@@ -254,13 +376,50 @@ def extract_segments_from_instance(
                     source=SEC_SOURCE,
                     source_url=source_url,
                     accession_number=accession_number,
-                    xbrl_tag=f"us-gaap:{picked_tag}",
-                    data_status=DataStatus.REPORTED,
+                    xbrl_tag=f"us-gaap:{hit.tag}",
+                    data_status=status,
+                    status_note=note,
                 )
             )
         segments.append(ext)
 
-    return SegmentExtractionResult(segments=segments, note=None)
+    reported = [s for s in segments if any(f.data_status != DataStatus.MISSING for f in s.facts)]
+    omitted = sorted(s.name for s in segments if s not in reported)
+
+    # Nesting, from the filing's own definition linkbase.
+    parents = member_parents or {}
+    local_by_name = _segment_member_locals(contexts)
+    name_by_local = {local_by_name[s.name]: s.name for s in reported if s.name in local_by_name}
+    for s in reported:
+        own = local_by_name.get(s.name)
+        for parent_local in sorted(parents.get(own, set())):
+            parent_name = name_by_local.get(parent_local)
+            if parent_name is None or parent_name == s.name:
+                continue
+            if own in parents.get(parent_local, set()):  # mutual: ambiguous, flag neither
+                continue
+            s.parent_segment = parent_name
+            break
+
+    notes: list[str] = []
+    if omitted:
+        notes.append(
+            f"Segment members with no reported value for {fiscal_period} {fiscal_year} are not listed "
+            f"(typically segments that were recast or discontinued and appear only in other periods): {', '.join(omitted)}."
+        )
+    nested = sorted(f"{s.name} (in {s.parent_segment})" for s in reported if s.parent_segment)
+    if nested:
+        notes.append(
+            "These members are nested under another listed segment, whose amounts already include theirs; "
+            "do not add them to the parent: " + "; ".join(nested) + "."
+        )
+    recon = _reconciling_items(contexts, facts_index, fiscal_year, fiscal_period)
+    if recon:
+        notes.append(
+            "Reconciling items that are not segments (segment amounts need them to add up to the consolidated figures): "
+            + "; ".join(recon) + "."
+        )
+    return SegmentExtractionResult(segments=reported, note=" ".join(notes) or None)
 
 
 def extract_segments_for_filing(
@@ -279,6 +438,8 @@ def extract_segments_for_filing(
     caching/rate-limiting/typed-error handling via ``get_filing_xbrl``.
     """
     contexts, facts = connector.get_filing_xbrl(filing["source_url"])
+    hierarchy_fetch = getattr(connector, "get_filing_member_hierarchy", None)
+    member_parents = hierarchy_fetch(filing["source_url"]) if hierarchy_fetch is not None else None
     return extract_segments_from_instance(
         contexts,
         facts,
@@ -287,4 +448,5 @@ def extract_segments_for_filing(
         cik10=cik10,
         accession_number=filing.get("accession_number"),
         source_url=filing["source_url"],
+        member_parents=member_parents,
     )

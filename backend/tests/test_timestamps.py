@@ -140,7 +140,7 @@ def importlib_find(name):
 # --------------------------------------------------------------------------
 
 
-def test_migration_is_the_head_and_a_noop_on_sqlite(tmp_path, monkeypatch):
+def test_timestamptz_migration_is_a_noop_on_sqlite_and_the_head_is_reachable(tmp_path, monkeypatch):
     url = f"sqlite:///{tmp_path / 'tz.db'}"
     monkeypatch.setenv("DATABASE_URL", url)
     cfg = Config("backend/alembic.ini")
@@ -152,7 +152,9 @@ def test_migration_is_the_head_and_a_noop_on_sqlite(tmp_path, monkeypatch):
     command.upgrade(cfg, "head")
 
     with engine.connect() as c:
-        assert c.execute(text("select version_num from alembic_version")).scalar_one() == "a7b8c9d0e1f2"
+        from alembic.script import ScriptDirectory
+
+        assert c.execute(text("select version_num from alembic_version")).scalar_one() == ScriptDirectory.from_config(cfg).get_current_head()
         assert [(r[1], r[2]) for r in c.execute(text("PRAGMA table_info('audit_log_entry')")).all()] == before
     command.downgrade(cfg, "f6a7b8c9d0e1")  # and the downgrade is a no-op too
 

@@ -36,7 +36,8 @@ def test_real_googl_segment_extraction(tmp_path):
         filing=filing,
     )
 
-    assert result.note is None, f"expected real segment data, got note: {result.note}"
+    assert result.segments, "expected real segment data"
+    assert "No segment-dimensional" not in (result.note or ""), result.note
     names = {s.name for s in result.segments}
     # Alphabet discloses at least Google Services and Google Cloud as segments.
     assert any("Cloud" in n for n in names)

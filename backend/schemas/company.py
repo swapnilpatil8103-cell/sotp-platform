@@ -41,6 +41,7 @@ class FinancialFactRead(BaseModel):
     accession_number: Optional[str] = None
     xbrl_tag: Optional[str] = None
     data_status: str
+    status_note: Optional[str] = None  # why a DERIVED / CONFLICTING (restated) value is what it is
 
 
 class CompanyFactsRead(BaseModel):
