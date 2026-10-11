@@ -75,6 +75,18 @@ jobs:
         if: failure()
         run: python .github/scripts/summarize_junit.py pytest.xml
 
+  docker-smoke:
+    name: Docker stack smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Builds both images, starts the compose stack with fresh secrets, then checks health,
+      # migrations, first-admin bootstrap, sign-in/DCF/sign-out through the web app, port
+      # exposure, non-root users, secrets in image layers and image sizes. It calls real SEC
+      # EDGAR once (company lookup). Results appear as annotations and in the job summary.
+      - run: bash scripts/smoke_test.sh
+
   web:
     name: Web typecheck and build
     runs-on: ubuntu-latest
