@@ -35,11 +35,12 @@ deleted opportunistically.
 Limits of this design: a determined attacker with many IPs gets about
 ``EMAIL.threshold`` guesses per window per email (plus back-off), which is why
 passwords have a 12-character minimum and are hashed with Argon2id. IPs come from
-``backend.api.deps``'s ``client_ip`` and are only as trustworthy as the proxy
-configuration (``AUTH_TRUST_FORWARDED_FOR``): if a client can set its own
-``X-Forwarded-For`` (the Next.js server passes it through unchanged), it can pick
-its own address and so escape the pair and ip scopes, leaving only the email scope.
-Deploy behind a reverse proxy that appends the real peer address.
+``backend.api.deps``'s ``client_ip``: the socket peer by default, or, with
+``AUTH_TRUST_FORWARDED_FOR=true``, the rightmost untrusted ``X-Forwarded-For`` entry
+but only when the socket peer is in ``AUTH_TRUSTED_PROXIES``. The compose stack puts
+Caddy (which overwrites the header with the real client address) in front of the web
+server, and neither the web server nor the backend is published, so a client cannot
+reach a hop that would believe a header it chose.
 """
 
 from __future__ import annotations

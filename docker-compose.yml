@@ -1,7 +1,43 @@
-# docker compose up --build
-# Reads secrets from .env in this directory (see .env.example); AUTH_JWT_SECRET is required.
+# docker compose up --build        ->  http://localhost:8080
+# Reads secrets from .env in this directory (see .env.example); AUTH_JWT_SECRET and
+# PROXY_SHARED_SECRET are required. For production (HTTPS on 80/443) add the override:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Topology: client -> caddy (the ONLY published port) -> web (Next.js) -> backend (FastAPI) -> db.
+# web, backend and db are reachable only on the compose network. Caddy overwrites
+# X-Forwarded-For with the client's real address; the backend trusts that header only from
+# the web container's fixed address (AUTH_TRUSTED_PROXIES).
 services:
+  caddy:
+    image: caddy:2.8.4-alpine
+    environment:
+      # DOMAIN is deliberately not set here: unset = plain http on :80 inside the container
+      # (published as 8080). docker-compose.prod.yml sets it, which turns on automatic HTTPS.
+      PROXY_SHARED_SECRET: ${PROXY_SHARED_SECRET:?set PROXY_SHARED_SECRET (>= 32 chars) in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      web:
+        condition: service_healthy
+    networks: [sotp]
+    healthcheck:
+      # A tiny internal-only listener (not published); the public site may redirect to https.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
   db:
+    networks: [sotp]
     image: postgres:16
     environment:
       POSTGRES_USER: postgres
@@ -16,6 +52,7 @@ services:
       retries: 10
 
   backend:
+    networks: [sotp]
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -31,19 +68,15 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       LSE_API_KEY: ${LSE_API_KEY:-}
       LSE_API_BASE_URL: ${LSE_API_BASE_URL:-https://api.londonstrategicedge.com}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
       AUTH_TOKEN_MINUTES: ${AUTH_TOKEN_MINUTES:-60}
       MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-1048576}
-      # The web server forwards each user's address in X-Forwarded-For, and the
-      # login throttle trusts the rightmost entry. That is only safe because the
-      # backend is published on loopback below, so nothing outside this host can
-      # reach it directly and forge the header. Remove both together. The web
-      # server (port 3000) passes a client-supplied X-Forwarded-For through
-      # unchanged, so for production put a reverse proxy in front of it that
-      # appends the real client address; see the README ("Login throttling").
+      # The login throttle takes the client address from X-Forwarded-For, but only when the
+      # connection comes from the web container (its fixed address below), and then uses the
+      # rightmost untrusted entry. The backend refuses to start if the first is true and the
+      # second is empty. The backend publishes no port: only the web container can reach it.
       AUTH_TRUST_FORWARDED_FOR: "true"
-    ports:
-      - "127.0.0.1:8000:8000"
+      AUTH_TRUSTED_PROXIES: ${WEB_IP:-172.28.94.10}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)"]
       interval: 10s
@@ -54,16 +87,21 @@ services:
   web:
     build:
       context: apps/web
+    networks:
+      sotp:
+        ipv4_address: ${WEB_IP:-172.28.94.10}
     environment:
       API_BASE_URL: http://backend:8000
-      # Served over plain http on localhost; set true (the default for production
-      # builds) behind HTTPS.
+      # Caddy sends this on every request it forwards. Only requests carrying it are believed
+      # about X-Forwarded-For / X-Forwarded-Host; anything else has those headers dropped.
+      PROXY_SHARED_SECRET: ${PROXY_SHARED_SECRET:?set PROXY_SHARED_SECRET (>= 32 chars) in .env}
+      # Plain http on localhost:8080 here; docker-compose.prod.yml sets true (HTTPS).
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
     depends_on:
       backend:
         condition: service_healthy
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/login').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
@@ -71,5 +109,15 @@ services:
       retries: 6
       start_period: 20s
 
+networks:
+  sotp:
+    ipam:
+      config:
+        # Fixed so the backend can name the web container's address. If this range collides with
+        # a network on your host, change SOTP_SUBNET and WEB_IP together (WEB_IP inside the subnet).
+        - subnet: ${SOTP_SUBNET:-172.28.94.0/24}
+
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

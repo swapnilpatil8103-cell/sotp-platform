@@ -1,0 +1,40 @@
+# Reverse proxy: the only service that publishes a port.
+#
+#   DOMAIN unset -> plain http on :80 (docker-compose publishes it as localhost:8080)
+#   DOMAIN=app.example.com -> automatic HTTPS (Let's Encrypt) for that name, with the
+#                             http->https redirect; needs ports 80 and 443 reachable
+#                             from the internet (see docker-compose.prod.yml).
+{
+	admin off
+}
+
+{$DOMAIN::80} {
+	encode zstd gzip
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	reverse_proxy web:3000 {
+		# OVERWRITE, never append: whatever the client sent in these headers is discarded and
+		# replaced with what Caddy itself observed. (header_up with a value sets, not adds.)
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Host {http.request.hostport}
+		header_up X-Forwarded-Proto {scheme}
+		# Proves to the web server that the request came through this proxy; a client-supplied
+		# copy is overwritten here.
+		header_up X-Proxy-Secret {$PROXY_SHARED_SECRET}
+		# Other client-controlled spellings of the same claim are not forwarded at all.
+		header_up -Forwarded
+		header_up -X-Real-IP
+		header_up -X-Forwarded-Server
+	}
+}
+
+# Container healthcheck target. Never published.
+http://:8081 {
+	bind 127.0.0.1
+	respond /health 200
+}

@@ -7,7 +7,28 @@
  * component.
  */
 
+import { createHash, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
+
 export const SESSION_COOKIE = "sotp_session";
+
+/** Header our reverse proxy (Caddy) sets to a shared secret on every request it forwards. */
+export const PROXY_SECRET_HEADER = "x-proxy-secret";
+
+/**
+ * True only if the request carries the shared secret the reverse proxy attaches
+ * (PROXY_SHARED_SECRET). Without that configured, nothing is considered to have come
+ * through the proxy. The compare is constant-time. Forwarding headers (X-Forwarded-For,
+ * X-Forwarded-Host) are believed only for such requests: a client that reaches this
+ * server another way cannot pick its own address or host.
+ */
+export function cameThroughProxy(request: Request): boolean {
+  const secret = process.env.PROXY_SHARED_SECRET;
+  const presented = request.headers.get(PROXY_SECRET_HEADER);
+  if (!secret || !presented) return false;
+  const digest = (v: string) => createHash("sha256").update(v).digest();
+  return timingSafeEqual(digest(secret), digest(presented));
+}
 
 /** Where the FastAPI backend is reachable FROM THE NEXT.JS SERVER (not the browser). */
 export function backendBaseUrl(): string {
@@ -37,7 +58,8 @@ export function sessionCookieOptions(maxAgeSeconds: number) {
 export function isSameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return true; // same-origin navigations and non-browser clients omit it
-  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  const forwardedHost = cameThroughProxy(request) ? request.headers.get("x-forwarded-host") : null;
+  const host = forwardedHost ?? request.headers.get("host");
   try {
     return new URL(origin).host === host;
   } catch {
@@ -92,14 +114,19 @@ export function tooLarge(limit: number) {
 }
 
 /**
- * Client address to hand to the backend's login throttle. The backend (with
- * AUTH_TRUST_FORWARDED_FOR=true) uses the RIGHTMOST X-Forwarded-For entry, which
- * must be the address our own server saw. Without it every user would look like
- * this server.
+ * Client address to hand to the backend's login throttle.
+ *
+ * Only the address supplied by our reverse proxy is forwarded: when the request carries
+ * the proxy's shared secret, the (single) address Caddy wrote into X-Forwarded-For. Any
+ * X-Forwarded-For on a request that did NOT come through the proxy is dropped, so the
+ * backend sees this server's own address instead of one the client chose. The secret
+ * itself is never forwarded.
  */
 export function forwardedForHeaders(request: Request): Record<string, string> {
-  const xff = request.headers.get("x-forwarded-for");
-  return xff ? { "X-Forwarded-For": xff } : {};
+  if (!cameThroughProxy(request)) return {};
+  const entries = (request.headers.get("x-forwarded-for") ?? "").split(",");
+  const address = entries[entries.length - 1].trim(); // the proxy overwrites the header, so this is its only entry
+  return isIP(address) ? { "X-Forwarded-For": address } : {};
 }
 
 export type SessionInfo = { subject: string; roles: string[]; expires_at: number };

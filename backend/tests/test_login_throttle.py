@@ -17,6 +17,9 @@ from backend.services import users
 from backend.tests.fixtures.auth import TEST_JWT_SECRET
 
 client = TestClient(app, raise_server_exceptions=False)
+PROXY_ADDR = "172.28.0.10"
+# The same app, but the socket peer is the trusted reverse-proxy hop (what the backend sees in compose).
+proxy_client = TestClient(app, raise_server_exceptions=False, client=(PROXY_ADDR, 50000))
 PASSWORD = "correct horse battery staple"
 EMAIL = "victim@example.com"
 
@@ -39,8 +42,15 @@ def locked(session, *, email: str = EMAIL, ip: str = "10.0.0.1", now=None) -> in
     return 0
 
 
-def _login(email: str, password: str, headers=None):
-    return client.post("/auth/login", json={"email": email, "password": password}, headers=headers or {})
+def _login(email: str, password: str, headers=None, *, via=None):
+    return (via or client).post("/auth/login", json={"email": email, "password": password}, headers=headers or {})
+
+
+@pytest.fixture()
+def trust_proxy(monkeypatch):
+    """AUTH_TRUST_FORWARDED_FOR=true with the proxy hop trusted; call _login(..., via=proxy_client)."""
+    monkeypatch.setenv("AUTH_TRUST_FORWARDED_FOR", "true")
+    monkeypatch.setenv("AUTH_TRUSTED_PROXIES", PROXY_ADDR)
 
 
 @pytest.fixture()
@@ -236,14 +246,13 @@ def test_hammering_a_locked_account_does_not_extend_the_lock(session, user):
     assert int(_login(EMAIL, PASSWORD).headers["retry-after"]) <= first  # never longer than before
 
 
-def test_the_real_user_is_not_locked_out_by_an_attacker_on_another_ip(monkeypatch, user):
-    monkeypatch.setenv("AUTH_TRUST_FORWARDED_FOR", "true")
+def test_the_real_user_is_not_locked_out_by_an_attacker_on_another_ip(trust_proxy, user):
     attacker = {"X-Forwarded-For": "6.6.6.6"}
     for _ in range(lt.PAIR.threshold):
-        assert _login(EMAIL, "wrong password here", attacker).status_code == 401
-    assert _login(EMAIL, PASSWORD, attacker).status_code == 429  # attacker is locked...
+        assert _login(EMAIL, "wrong password here", attacker, via=proxy_client).status_code == 401
+    assert _login(EMAIL, PASSWORD, attacker, via=proxy_client).status_code == 429  # attacker is locked...
 
-    assert _login(EMAIL, PASSWORD, {"X-Forwarded-For": "203.0.113.7"}).status_code == 200  # ...the user is not
+    assert _login(EMAIL, PASSWORD, {"X-Forwarded-For": "203.0.113.7"}, via=proxy_client).status_code == 200  # ...the user is not
 
 
 def test_a_successful_login_resets_the_pair_counter(user):
@@ -254,14 +263,13 @@ def test_a_successful_login_resets_the_pair_counter(user):
         assert _login(EMAIL, "wrong password here").status_code == 401
 
 
-def test_api_per_ip_limit_across_many_emails(monkeypatch):
-    monkeypatch.setenv("AUTH_TRUST_FORWARDED_FOR", "true")
+def test_api_per_ip_limit_across_many_emails(trust_proxy):
     sprayer = {"X-Forwarded-For": "6.6.6.6"}
     for i in range(lt.IP.threshold):
-        assert _login(f"user{i}@example.com", "wrong password here", sprayer).status_code == 401
+        assert _login(f"user{i}@example.com", "wrong password here", sprayer, via=proxy_client).status_code == 401
 
-    assert _login("fresh@example.com", "wrong password here", sprayer).status_code == 429
-    assert _login("fresh@example.com", "wrong password here", {"X-Forwarded-For": "7.7.7.7"}).status_code == 401
+    assert _login("fresh@example.com", "wrong password here", sprayer, via=proxy_client).status_code == 429
+    assert _login("fresh@example.com", "wrong password here", {"X-Forwarded-For": "7.7.7.7"}, via=proxy_client).status_code == 401
 
 
 # --------------------------------------------------------------------------
@@ -279,24 +287,87 @@ def test_forwarded_header_is_ignored_unless_explicitly_trusted(session, monkeypa
     assert _recorded_ip(session) == "testclient"  # the socket peer; a client cannot choose its own address
 
 
-def test_rightmost_forwarded_entry_is_used_when_trusted(session, monkeypatch):
-    monkeypatch.setenv("AUTH_TRUST_FORWARDED_FOR", "true")
-    # Anything left of the last hop is client-supplied and spoofable; the proxy-appended one is not.
-    _login("a@example.com", "wrong password here", {"X-Forwarded-For": "1.2.3.4, 5.6.7.8"})
+def test_rightmost_untrusted_forwarded_entry_is_used_from_a_trusted_proxy(session, trust_proxy):
+    # Anything left of the last hop is client-supplied and spoofable; the proxy-set one is not.
+    _login("a@example.com", "wrong password here", {"X-Forwarded-For": "1.2.3.4, 5.6.7.8"}, via=proxy_client)
     assert _recorded_ip(session) == "5.6.7.8"
 
 
-@pytest.mark.parametrize("junk", ["not-an-ip", "", "1.2.3.4, <script>"])
-def test_unparseable_forwarded_value_falls_back_to_the_socket_peer(session, monkeypatch, junk):
+def test_trusted_hops_are_skipped_from_the_right(session, monkeypatch):
     monkeypatch.setenv("AUTH_TRUST_FORWARDED_FOR", "true")
-    _login("a@example.com", "wrong password here", {"X-Forwarded-For": junk})
+    monkeypatch.setenv("AUTH_TRUSTED_PROXIES", f"{PROXY_ADDR}, 10.9.0.0/16")
+    _login("a@example.com", "wrong password here", {"X-Forwarded-For": "8.8.8.8, 5.6.7.8, 10.9.1.1"}, via=proxy_client)
+    assert _recorded_ip(session) == "5.6.7.8"
+
+
+def test_spoofed_forwarded_header_from_an_untrusted_peer_does_not_change_the_recorded_address(session, trust_proxy):
+    # The caller is NOT the proxy (it connects directly), so its header is ignored even though trust is on.
+    _login("a@example.com", "wrong password here", {"X-Forwarded-For": "9.9.9.9"})  # peer: "testclient"
     assert _recorded_ip(session) == "testclient"
 
 
-def test_ipv6_forwarded_address_is_normalised(session, monkeypatch):
-    monkeypatch.setenv("AUTH_TRUST_FORWARDED_FOR", "true")
-    _login("a@example.com", "wrong password here", {"X-Forwarded-For": "2001:DB8:0:0:0:0:0:1"})
+def test_spoofed_header_from_a_directly_connected_ip_peer_is_ignored(session, trust_proxy):
+    outsider = TestClient(app, raise_server_exceptions=False, client=("198.51.100.20", 4000))
+    _login("a@example.com", "wrong password here", {"X-Forwarded-For": "9.9.9.9"}, via=outsider)
+    assert _recorded_ip(session) == "198.51.100.20"
+
+
+def test_rotating_spoofed_headers_from_outside_cannot_dodge_the_pair_limit(trust_proxy, user):
+    outsider = TestClient(app, raise_server_exceptions=False, client=("198.51.100.20", 4000))
+    codes = [
+        _login(EMAIL, "wrong password here", {"X-Forwarded-For": f"203.0.113.{i}"}, via=outsider).status_code
+        for i in range(lt.PAIR.threshold + 2)
+    ]
+    assert codes[: lt.PAIR.threshold] == [401] * lt.PAIR.threshold
+    assert codes[lt.PAIR.threshold :] == [429, 429]  # counted against the real peer, not the claimed ones
+
+
+def test_forwarded_header_is_ignored_entirely_when_trust_is_off(session, monkeypatch):
+    monkeypatch.setenv("AUTH_TRUST_FORWARDED_FOR", "false")
+    monkeypatch.setenv("AUTH_TRUSTED_PROXIES", PROXY_ADDR)  # even a listed proxy is not believed
+    _login("a@example.com", "wrong password here", {"X-Forwarded-For": "9.9.9.9"}, via=proxy_client)
+    assert _recorded_ip(session) == PROXY_ADDR
+
+
+@pytest.mark.parametrize("junk", ["not-an-ip", "", "1.2.3.4, <script>"])
+def test_unparseable_forwarded_value_falls_back_to_the_socket_peer(session, trust_proxy, junk):
+    _login("a@example.com", "wrong password here", {"X-Forwarded-For": junk}, via=proxy_client)
+    assert _recorded_ip(session) == PROXY_ADDR
+
+
+def test_ipv6_forwarded_address_is_normalised(session, trust_proxy):
+    _login("a@example.com", "wrong password here", {"X-Forwarded-For": "2001:DB8:0:0:0:0:0:1"}, via=proxy_client)
     assert _recorded_ip(session) == "2001:db8::1"
+
+
+# --------------------------------------------------------------------------
+# startup validation
+# --------------------------------------------------------------------------
+
+
+def test_startup_refuses_trust_without_a_trusted_proxy_list(monkeypatch):
+    from backend.api.deps import validate_proxy_config
+
+    monkeypatch.setenv("AUTH_TRUST_FORWARDED_FOR", "true")
+    monkeypatch.delenv("AUTH_TRUSTED_PROXIES", raising=False)
+    with pytest.raises(RuntimeError, match="AUTH_TRUSTED_PROXIES"):
+        validate_proxy_config()
+    monkeypatch.setenv("AUTH_TRUSTED_PROXIES", " , ")
+    with pytest.raises(RuntimeError, match="AUTH_TRUSTED_PROXIES"):
+        validate_proxy_config()
+    monkeypatch.setenv("AUTH_TRUSTED_PROXIES", "172.28.0.10")
+    validate_proxy_config()  # fine
+
+
+def test_startup_rejects_a_malformed_proxy_entry_and_allows_trust_off(monkeypatch):
+    from backend.api.deps import validate_proxy_config
+
+    monkeypatch.setenv("AUTH_TRUST_FORWARDED_FOR", "false")
+    monkeypatch.delenv("AUTH_TRUSTED_PROXIES", raising=False)
+    validate_proxy_config()
+    monkeypatch.setenv("AUTH_TRUSTED_PROXIES", "not-a-network")
+    with pytest.raises(RuntimeError, match="not-a-network"):
+        validate_proxy_config()
 
 
 # --------------------------------------------------------------------------
@@ -308,3 +379,19 @@ def test_login_attempt_columns_fit_an_ipv6_address_and_a_sha256_hex():
     assert LoginAttempt.__table__.c.ip.type.length >= 45
     assert LoginAttempt.__table__.c.email_hash.type.length == 64
     assert AppUser.__table__.c.token_version.default.arg == 0
+
+
+def test_the_app_itself_refuses_to_import_with_trust_but_no_proxy_list():
+    """The real startup path: importing the app module aborts with a clear message."""
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "AUTH_TRUST_FORWARDED_FOR": "true", "AUTH_JWT_SECRET": TEST_JWT_SECRET}
+    env.pop("AUTH_TRUSTED_PROXIES", None)
+    proc = subprocess.run([sys.executable, "-c", "import backend.api.main"], env=env, capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "AUTH_TRUSTED_PROXIES" in proc.stderr
+    env["AUTH_TRUSTED_PROXIES"] = "172.28.94.10"
+    ok = subprocess.run([sys.executable, "-c", "import backend.api.main"], env=env, capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stderr

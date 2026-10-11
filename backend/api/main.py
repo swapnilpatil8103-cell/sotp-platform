@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.api.body_limit import BodySizeLimitMiddleware
-from backend.api.deps import get_current_user
+from backend.api.deps import get_current_user, validate_proxy_config
 from backend.api.routers import admin, auth, companies, filings, market_data, segments, valuation, scenarios, memo
 
 app = FastAPI(
@@ -55,6 +55,7 @@ def parse_allowed_origins(raw: str, *, allow_credentials: bool = CORS_ALLOW_CRED
     return origins
 
 
+validate_proxy_config()  # refuses to start if X-Forwarded-For is trusted without a proxy list
 origins = parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000"))
 
 # Added first = innermost. CORS is added last so it is outermost and a 413 from

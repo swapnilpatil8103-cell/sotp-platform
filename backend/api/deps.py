@@ -205,23 +205,73 @@ require_analyst = require_role(ROLE_ANALYST)
 require_admin = require_role(ROLE_ADMIN)
 
 
-def client_ip(request: Request) -> str:
-    """The caller's IP address, as recorded by the login throttle.
+def _truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() == "true"
 
-    Behind the Next.js server the socket peer is that server, so every user would
-    look like one address. With ``AUTH_TRUST_FORWARDED_FOR=true`` the RIGHTMOST
-    ``X-Forwarded-For`` entry is used instead: the one appended by our own proxy,
-    which a client cannot forge (anything to its left can be). Only enable it when
-    the backend is reachable solely through that proxy. Falls back to the socket
-    peer, and to "unknown" if there is none.
+
+def trusted_proxy_networks() -> list:
+    """Networks in ``AUTH_TRUSTED_PROXIES`` (comma-separated addresses or CIDRs).
+
+    Raises ``RuntimeError`` for an entry that is not an address/network, so a typo
+    aborts startup instead of silently trusting nothing (or, worse, the wrong thing).
     """
     import ipaddress
 
-    if os.environ.get("AUTH_TRUST_FORWARDED_FOR", "").strip().lower() == "true":
-        forwarded = request.headers.get("x-forwarded-for", "")
-        candidate = forwarded.split(",")[-1].strip() if forwarded else ""
+    networks = []
+    for raw in os.environ.get("AUTH_TRUSTED_PROXIES", "").split(","):
+        entry = raw.strip()
+        if not entry:
+            continue
         try:
-            return str(ipaddress.ip_address(candidate))
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError as exc:
+            raise RuntimeError(f"AUTH_TRUSTED_PROXIES entry {entry!r} is not an IP address or CIDR network.") from exc
+    return networks
+
+
+def validate_proxy_config() -> None:
+    """Refuse to start with ``AUTH_TRUST_FORWARDED_FOR=true`` and no trusted proxy list.
+
+    Trusting X-Forwarded-For without saying WHO may set it lets any caller choose the
+    address the login throttle records.
+    """
+    networks = trusted_proxy_networks()  # also validates the entries
+    if _truthy("AUTH_TRUST_FORWARDED_FOR") and not networks:
+        raise RuntimeError(
+            "AUTH_TRUST_FORWARDED_FOR=true requires AUTH_TRUSTED_PROXIES (the address(es) or CIDR of the "
+            "reverse proxy hop(s) allowed to set X-Forwarded-For). Set it, or set AUTH_TRUST_FORWARDED_FOR=false."
+        )
+
+
+def client_ip(request: Request) -> str:
+    """The caller's IP address, as recorded by the login throttle.
+
+    By default this is the socket peer and ``X-Forwarded-For`` is ignored entirely.
+    With ``AUTH_TRUST_FORWARDED_FOR=true`` the header is honoured ONLY when the socket
+    peer is itself in ``AUTH_TRUSTED_PROXIES``; the entries are then read from the
+    right, skipping trusted hops, and the first untrusted address is the client (the
+    "rightmost trusted hop" rule: everything to its left can be forged by the client).
+    A peer that is not a trusted proxy, an unparseable entry, or an exhausted list all
+    fall back to the socket peer (or "unknown" if there is none).
+    """
+    import ipaddress
+
+    peer = request.client.host if request.client else "unknown"
+    if not _truthy("AUTH_TRUST_FORWARDED_FOR"):
+        return peer
+    networks = trusted_proxy_networks()
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return peer
+    if not any(peer_ip in n for n in networks):
+        return peer
+    forwarded = request.headers.get("x-forwarded-for", "")
+    for entry in reversed(forwarded.split(",") if forwarded else []):
+        try:
+            hop = ipaddress.ip_address(entry.strip())
         except ValueError:
-            pass
-    return request.client.host if request.client else "unknown"
+            return peer
+        if not any(hop in n for n in networks):
+            return str(hop)
+    return peer

@@ -1,0 +1,20 @@
+# Production override: HTTPS on 80/443 with automatic certificates.
+#
+#   DOMAIN=app.example.com in .env, DNS pointing at this host, then:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Needs Docker Compose >= 2.24.4 (the `!override` tag replaces the local 8080 mapping).
+services:
+  caddy:
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN (the public host name) in .env}
+    ports: !override
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+  web:
+    environment:
+      SESSION_COOKIE_SECURE: "true"
+  backend:
+    environment:
+      ALLOWED_ORIGINS: https://${DOMAIN:?set DOMAIN (the public host name) in .env}

@@ -156,14 +156,27 @@ the last 30 days, so spreading failures across many addresses does not lock the
 real user out of where they actually sign in. Change-password attempts with a wrong
 current password count too.
 
-The "ip" is the socket peer unless `AUTH_TRUST_FORWARDED_FOR=true`, which uses the
-rightmost `X-Forwarded-For` entry. Behind the Next.js server you need it (else every
-web user looks like one address, which would make the pair lock global), **but only
-if the backend is reachable solely through your own proxy** and that proxy
-appends the real client address. `next start` exposed directly to the internet
-passes a client-supplied `X-Forwarded-For` through unchanged, so a client could
-pick its own throttle address; the email-wide limit and Argon2id then remain the
-defence. Put a reverse proxy in front for production.
+**Where the "ip" comes from.** By default it is the socket peer and `X-Forwarded-For` is
+ignored entirely. Behind the Next.js server the peer is always that server (so every web
+user would look like one address and the pair lock would be global), so the compose stack
+sets `AUTH_TRUST_FORWARDED_FOR=true`. That setting alone is not enough, on purpose:
+
+- The backend believes the header **only when the connection comes from an address in
+  `AUTH_TRUSTED_PROXIES`** (comma-separated IPs or CIDRs), and then reads entries from the
+  right, skipping trusted hops; the first untrusted address is the client. A direct
+  connection from anywhere else, an unparseable entry, or an exhausted list falls back to the
+  socket peer.
+- **The backend refuses to start** if `AUTH_TRUST_FORWARDED_FOR=true` and `AUTH_TRUSTED_PROXIES`
+  is empty (or contains something that is not an address/network).
+- In compose, Caddy is the only published service. It **overwrites** (does not append to)
+  `X-Forwarded-For` with the address it saw, and adds a secret header
+  (`PROXY_SHARED_SECRET`). The Next.js server forwards an address to the backend only for
+  requests that carry that secret, and drops any other `X-Forwarded-For`. The web server
+  and the backend publish no ports, so a client cannot reach them directly.
+- Caveat: the address Caddy sees is whatever Docker hands it. Behind Docker Desktop or a
+  further load balancer that may be a gateway address, in which case all users share one
+  throttle address (safe, but coarse). Put your own load balancer's address in
+  `AUTH_TRUSTED_PROXIES` / configure Caddy `trusted_proxies` if you add one in front.
 
 **Changing a password and revoking sessions.** Every token carries a version
 (`tv`) that must equal `app_user.token_version`. `POST /auth/change-password`
@@ -289,23 +302,45 @@ not changed since they were written; on a UTC server it changes nothing.
 Run the whole stack (Postgres 16 + backend + web) with Docker:
 
 ```bash
-# .env needs AUTH_JWT_SECRET (>= 32 chars); see .env.example
-docker compose up --build
+# .env needs AUTH_JWT_SECRET and PROXY_SHARED_SECRET (each >= 32 chars); see .env.example
+docker compose up --build        # then open http://localhost:8080
 ```
 
-The backend container applies the Alembic migrations on start, then serves on
-port 8000; the web app is on port 3000 and reaches the backend through its own
-server (`API_BASE_URL=http://backend:8000`), so nothing secret is baked into the
-image. Create the first admin once the stack is up (prompts for the password; refused once an active admin exists):
+Topology: **client → Caddy → web (Next.js) → backend (FastAPI) → Postgres.** Caddy
+(`Caddyfile`) is the only service with a published port (`8080`, or `HTTP_PORT`). The web
+server, backend and database are on the compose network only; the web app reaches the
+backend as `API_BASE_URL=http://backend:8000`, so nothing secret is baked into the image.
+Caddy overwrites `X-Forwarded-For`/`-Host`/`-Proto` with what it observed, so a client
+cannot choose its throttle address (see Login throttling).
+
+**Production (HTTPS).** Set `DOMAIN=app.example.com` in `.env`, point DNS at the host, and run
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+This publishes 80 and 443 (instead of 8080), makes Caddy obtain and renew a certificate for
+`DOMAIN` automatically (and redirect http to https), sets `SESSION_COOKIE_SECURE=true` so the
+session cookie is only sent over HTTPS, and sets `ALLOWED_ORIGINS=https://$DOMAIN`. It needs
+Docker Compose 2.24.4+ and ports 80/443 reachable from the internet for the certificate
+challenge. The local stack uses plain http and `SESSION_COOKIE_SECURE=false`.
+
+The fixed network range (`SOTP_SUBNET`, default `172.28.94.0/24`, web at `WEB_IP`
+`172.28.94.10`) exists so the backend can name the one address it trusts; change both
+together if the range collides with a network on your host.
+
+Create the first admin once the stack is up (prompts for the password; refused once an active admin exists):
 
 ```bash
 docker compose exec backend python scripts/create_user.py --email you@example.com --bootstrap-admin
 ```
 
-**What has been verified.** `bash scripts/smoke_test.sh` builds both images, starts the
-stack with freshly generated secrets, and checks it end to end; it is the
-`docker-smoke` job in CI. On a GitHub-hosted Ubuntu runner (Docker with Compose v2) all
-38 checks passed, including:
+**What has been verified.** `bash scripts/smoke_test.sh` builds the images, starts the
+stack with freshly generated secrets, and checks it end to end; it is the `docker-smoke`
+job in CI. The list below describes the stack **before the Caddy reverse proxy was added**
+(38 checks passed on a GitHub-hosted Ubuntu runner); the proxy changes the port and
+exposure checks and adds the spoofed-header checks, and those have not yet been confirmed by
+a CI run, so treat the port/exposure lines as superseded by "Topology" above:
 
 - `docker compose build` and `up -d`; db, backend and web all report `healthy`
   (healthchecks: `pg_isready`, `GET /health`, `GET /login`).
@@ -388,7 +423,14 @@ Copy `.env.example` to `.env` and fill in real values. Never commit `.env`
   required to run the test suite** — `conftest.py` pins a test-only secret.
 - `ALLOWED_ORIGINS` — exact origins allowed by CORS; a wildcard aborts startup.
 - `AUTH_TRUST_FORWARDED_FOR` — `true` to take the login throttle's client address from
-  the rightmost `X-Forwarded-For` entry (see Login throttling). Default `false`.
+  `X-Forwarded-For`, but only for connections from `AUTH_TRUSTED_PROXIES`. Default `false`
+  (header ignored). Startup fails if it is `true` and the list is empty.
+- `AUTH_TRUSTED_PROXIES` — comma-separated IPs/CIDRs allowed to set `X-Forwarded-For`
+  (compose: the web container, `WEB_IP`).
+- `PROXY_SHARED_SECRET` — compose only; shared by Caddy and the web server so the web server
+  can tell proxied requests from direct ones (>= 32 random characters).
+- `DOMAIN`, `HTTP_PORT` — compose only; public host name for automatic HTTPS (production
+  override) and the local proxy port (default 8080).
 - `MAX_REQUEST_BODY_BYTES` — request body limit for the API (default 1048576);
   `MAX_PROXY_BODY_BYTES` is the web proxy's (set in `apps/web/.env.local`).
 - `AUTH_TOKEN_MINUTES` — lifetime of a login token (default 60, clamped to

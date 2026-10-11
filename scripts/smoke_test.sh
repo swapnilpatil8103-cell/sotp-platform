@@ -14,15 +14,17 @@
 #   2  Alembic ran to head inside the backend container, with no errors in its logs
 #   3  bootstrap the first admin inside the container; a second bootstrap is refused
 #   4  through the web app: /login, sign in, session cookie flags, company page, DCF run, sign out
-#   5  exposure and hygiene: published ports, non-root processes, no secrets in image
-#      layers or the image filesystem, image sizes
+#   5  exposure and hygiene: Caddy is the only published port, non-root processes, no
+#      secrets in image layers or the image filesystem, image sizes
+#   6  login throttle cannot be dodged with a spoofed X-Forwarded-For (through Caddy, and
+#      straight at the web container)
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 PROJECT="${SMOKE_PROJECT:-sotp-smoke}"
-WEB="http://localhost:3000"
-API="http://127.0.0.1:8000"
+PUBLIC_PORT="${SMOKE_HTTP_PORT:-8080}"
+WEB="http://localhost:$PUBLIC_PORT"   # Caddy: the only published port
 KEEP="${KEEP:-0}"
 TMP="$(mktemp -d)"
 ENVFILE="$TMP/smoke.env"
@@ -38,11 +40,14 @@ rand() { head -c 96 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c "$1"; }
 
 AUTH_JWT_SECRET="$(rand 48)"
 POSTGRES_PASSWORD="$(rand 24)"
+PROXY_SHARED_SECRET="$(rand 48)"
 ADMIN_EMAIL="admin@smoke.test"
 ADMIN_PASSWORD="Sm0ke-$(rand 20)"
 {
   echo "AUTH_JWT_SECRET=$AUTH_JWT_SECRET"
   echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD"
+  echo "PROXY_SHARED_SECRET=$PROXY_SHARED_SECRET"
+  echo "HTTP_PORT=$PUBLIC_PORT"
   echo "SEC_USER_AGENT=${SEC_USER_AGENT:-SOTP Intelligence smoke test smoke@example.com}"
 } > "$ENVFILE"
 
@@ -107,7 +112,7 @@ health_of() { docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{e
 deadline=$((SECONDS + 300))
 while :; do
   statuses=""; all=1
-  for svc in db backend web; do
+  for svc in db backend web caddy; do
     h="$(health_of "$svc")"; statuses="$statuses $svc=$h"
     [ "$h" = "healthy" ] || all=0
     [ "$h" = "unhealthy" ] && { all=2; break; }
@@ -183,22 +188,31 @@ after="$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' "$WEB/api/backend/valu
 
 # ================================================================ 5. exposure and hygiene
 step "5. exposure, users, secrets, size"
-bport="$(dc port backend 8000 2>/dev/null)"
-[[ "$bport" == 127.0.0.1:* ]] && ok "backend is published on loopback only" "$bport" || bad "backend is published on loopback only" "'$bport'"
-dport="$(dc port db 5432 2>/dev/null)"
 # `docker compose port` prints nothing or ":0" when a port is not published.
-if [ -z "$dport" ] || [ "$dport" = ":0" ]; then ok "database port is not published" "no host binding (compose reports '${dport:-}')"; else bad "database port is not published" "$dport"; fi
-wport="$(dc port web 3000 2>/dev/null)"
-[ -n "$wport" ] && ok "web is published (intended)" "$wport" || bad "web is published (intended)" "no binding"
+not_published() { [ -z "$1" ] || [ "$1" = ":0" ]; }
+bport="$(dc port backend 8000 2>/dev/null)"
+not_published "$bport" && ok "backend publishes no port" "no host binding (compose reports '${bport:-}')" || bad "backend publishes no port" "$bport"
+wport0="$(dc port web 3000 2>/dev/null)"
+not_published "$wport0" && ok "web (3000) publishes no port" "no host binding (compose reports '${wport0:-}')" || bad "web (3000) publishes no port" "$wport0"
+dport="$(dc port db 5432 2>/dev/null)"
+not_published "$dport" && ok "database port is not published" "no host binding (compose reports '${dport:-}')" || bad "database port is not published" "$dport"
+cport="$(dc port caddy 80 2>/dev/null)"
+[ -n "$cport" ] && ! not_published "$cport" && ok "caddy publishes port 80 as $PUBLIC_PORT (intended)" "$cport" || bad "caddy publishes port 80 as $PUBLIC_PORT (intended)" "'$cport'"
+published="$(docker ps --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Names}}: {{.Ports}}' | grep -E '(0\.0\.0\.0|\[::\]|127\.0\.0\.1):[0-9]+->' | sed -E 's/.*(0\.0\.0\.0|\[::\]|127\.0\.0\.1):([0-9]+)->.*/\2/' | sort -u | tr '\n' ' ')"
+[ "${published% }" = "$PUBLIC_PORT" ] && ok "the only published host port is $PUBLIC_PORT" "$published" || bad "the only published host port is $PUBLIC_PORT" "published: '$published'"
 HOSTIP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [ -n "$HOSTIP" ] && [[ "$HOSTIP" != 127.* ]]; then
-  curl -s -o /dev/null --max-time 5 "http://$HOSTIP:8000/health" && bad "backend is NOT reachable on the host's external address" "http://$HOSTIP:8000 answered" || ok "backend is NOT reachable on the host's external address" "http://$HOSTIP:8000 refused"
-  curl -s -o /dev/null --max-time 5 "http://$HOSTIP:5432" && bad "database is NOT reachable on the host's external address" "http://$HOSTIP:5432 answered" || ok "database is NOT reachable on the host's external address" "http://$HOSTIP:5432 refused"
-  curl -s -o /dev/null --max-time 5 "http://$HOSTIP:3000/login" && ok "web IS reachable on the host's external address (intended)" "http://$HOSTIP:3000" || bad "web IS reachable on the host's external address (intended)" "http://$HOSTIP:3000 refused"
+  for p in 8000 3000 5432; do
+    curl -s -o /dev/null --max-time 5 "http://$HOSTIP:$p/" && bad "port $p is NOT reachable on the host's external address" "http://$HOSTIP:$p answered" || ok "port $p is NOT reachable on the host's external address" "http://$HOSTIP:$p refused"
+  done
+  curl -s -o /dev/null --max-time 5 "http://$HOSTIP:$PUBLIC_PORT/login" && ok "the proxy IS reachable on the host's external address (intended)" "http://$HOSTIP:$PUBLIC_PORT" || bad "the proxy IS reachable on the host's external address (intended)" "http://$HOSTIP:$PUBLIC_PORT refused"
 else
   echo "SKIP  external-address reachability (no non-loopback address found)"
 fi
-curl -s -o /dev/null -w '' --max-time 5 "$API/health" && ok "backend answers on loopback (intended)" "$API/health" || bad "backend answers on loopback (intended)" "$API/health did not answer"
+for p in 8000 3000; do
+  curl -s -o /dev/null --max-time 5 "http://127.0.0.1:$p/" && bad "nothing answers on 127.0.0.1:$p" "answered" || ok "nothing answers on 127.0.0.1:$p" "refused"
+done
+dc exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4)" >/dev/null 2>&1 && ok "backend answers inside its container (intended)" "/health" || bad "backend answers inside its container (intended)" "/health did not answer"
 
 for svc in db backend web; do
   uid="$(dc exec -T "$svc" sh -c "awk '/^Uid:/{print \$2}' /proc/1/status" 2>/dev/null | tr -d '[:space:]')"
@@ -225,6 +239,44 @@ wsize="$(docker image inspect -f '{{.Size}}' "$(docker inspect -f '{{.Image}}' "
 mb() { echo $(( $1 / 1000000 )); }
 [ "$bsize" -le "$BACKEND_MAX_BYTES" ] && ok "backend image size" "$(mb "$bsize") MB (limit $(mb "$BACKEND_MAX_BYTES") MB)" || bad "backend image size" "$(mb "$bsize") MB exceeds $(mb "$BACKEND_MAX_BYTES") MB"
 [ "$wsize" -le "$WEB_MAX_BYTES" ] && ok "web image size" "$(mb "$wsize") MB (limit $(mb "$WEB_MAX_BYTES") MB)" || bad "web image size" "$(mb "$wsize") MB exceeds $(mb "$WEB_MAX_BYTES") MB"
+
+# ================================================================ 6. spoofed X-Forwarded-For
+step "6. login throttle vs a spoofed X-Forwarded-For"
+# 12 bad logins for one (random) account with a different forged address each time. If the forged
+# addresses were believed, each attempt would look like a new client and the per-pair limit (5) would
+# never trip before the account-wide one (10). Correct behaviour: Caddy overwrites the header with
+# the real address, so the 6th attempt is already throttled.
+codes=""
+victim="spoof-$(rand 10)@smoke.test"
+for i in $(seq 1 12); do
+  c="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$WEB/api/auth/login" -H 'Content-Type: application/json' \
+        -H "X-Forwarded-For: 198.51.100.$i, 203.0.113.$((i + 100))" -H "X-Real-IP: 192.0.2.$i" -H "Forwarded: for=192.0.2.$i" \
+        -d "{\"email\":\"$victim\",\"password\":\"definitely-wrong-$i\"}")"
+  codes="$codes $c"
+done
+codes="${codes# }"
+expected="401 401 401 401 401 429 429 429 429 429 429 429"
+[ "$codes" = "$expected" ] && ok "12 bad logins with rotating spoofed X-Forwarded-For are throttled from the 6th (429)" "$codes" || bad "12 bad logins with rotating spoofed X-Forwarded-For are throttled from the 6th (429)" "got: $codes; expected: $expected"
+
+# The same attack straight at the web container, bypassing Caddy (not possible from outside the
+# compose network, so run from inside it): no proxy secret, so the forged header must be dropped
+# and every attempt counted against the web container's own address.
+victim2="spoof2-$(rand 10)@smoke.test"
+codes2="$(dc exec -T web node -e '
+(async () => {
+  const out = [];
+  for (let i = 1; i <= 12; i++) {
+    const r = await fetch("http://localhost:3000/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Forwarded-For": "198.51.100." + i },
+      body: JSON.stringify({ email: process.argv[1], password: "definitely-wrong-" + i }),
+    });
+    out.push(r.status);
+  }
+  console.log(out.join(" "));
+})();
+' "$victim2" 2>&1 | tr -d '\r' | tail -1)"
+[ "$codes2" = "$expected" ] && ok "spoofed X-Forwarded-For sent straight to the web server (no proxy secret) is dropped" "$codes2" || bad "spoofed X-Forwarded-For sent straight to the web server (no proxy secret) is dropped" "got: $codes2; expected: $expected"
 
 [ "$FAILED" -gt 0 ] && dump_logs >/dev/null
 finish

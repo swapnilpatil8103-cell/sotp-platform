@@ -91,8 +91,10 @@ checked nor recorded, so they cannot extend a lock. A successful login clears th
 successful login for that email in the last 30 days. Rows older than the window
 (failures) or 30 days (successes) are deleted as new ones are written. Unknown
 emails are recorded too, so the table does not reveal which accounts exist. The ip
-is the socket peer, or with `AUTH_TRUST_FORWARDED_FOR=true` the rightmost
-`X-Forwarded-For` entry; see the README for when that is safe.
+is the socket peer. With `AUTH_TRUST_FORWARDED_FOR=true` the `X-Forwarded-For` header is
+believed only when the connection comes from an address in `AUTH_TRUSTED_PROXIES`, and the
+rightmost untrusted entry is used; the server refuses to start if the first is set without
+the second. See the README ("Login throttling").
 
 ### Token version
 
